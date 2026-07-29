@@ -424,7 +424,7 @@ function renderNoticeBrandBlock(brand, dateStr, showSortLabel){
       <tbody>
         ${rows.map((r,i)=>`
         <tr>
-          <td>${i+1}</td><td class="txt">${r.s.region}</td><td class="txt">${r.s.short}</td><td class="txt">${r.s.opened}</td>
+          <td>${i+1}</td><td class="txt">${r.s.region}</td><td class="txt${r.s.type==='직영점'?' td-direct':''}">${r.s.short}</td><td class="txt${r.s.type==='직영점'?' td-direct':''}">${r.s.opened}</td>
           <td>${won(r.prevDay)}</td><td>${won(r.cur.receipts)}</td><td>${won(r.cur.unit)}</td>
           <td class="hl-cur">${won(r.cur.sales)}</td><td class="hl-proj">${won(r.proj)}</td><td>${won(r.cur.dayAvg??(r.cur.sales/(r.cur.days||1)))}</td>
           <td>${won(r.prevMonth)}</td><td>${deltaSpan(r.momP)}</td>
@@ -454,7 +454,7 @@ function renderNoticeRoyaltyBlock(brand, dateStr){
     const royProj = isFixed ? s.royaltyFixed : proj*s.royalty;
     sumCur+=cur; sumProj+=proj; sumRoyCur+=royCur; sumRoyProj+=royProj;
     return `<tr>
-      <td>${i+1}</td><td class="txt">${s.region}</td><td class="txt">${s.short}</td><td class="txt">${s.opened}</td>
+      <td>${i+1}</td><td class="txt">${s.region}</td><td class="txt${s.type==='직영점'?' td-direct':''}">${s.short}</td><td class="txt${s.type==='직영점'?' td-direct':''}">${s.opened}</td>
       <td>${won(cur)}</td><td>${won(proj)}</td><td>${isFixed ? '정액' : royPct(s.royalty)}</td>
       <td class="hl-cur">${won(royCur)}</td><td class="hl-proj">${won(royProj)}</td>
     </tr>`;
