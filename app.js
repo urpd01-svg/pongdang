@@ -204,9 +204,10 @@ const TITLES = {
   stores:['매장별현황','지점 기본정보 및 최근 실적'],
   entry:['매출 데이터 입력','포스 화면 표를 그대로 붙여넣으세요'],
   admin:['가맹점 정보 관리','지점 기본정보 · 계약정보 등록 및 수정'],
+  archive:['마감장표 업로드','월별 마감 완료된 엑셀 장표 보관'],
 };
-const NAV_ICON = { report:'▤', notice:'▥', analysis:'◈', stores:'▦', entry:'✎', admin:'⚙' };
-const DEFAULT_NAV_ORDER = ['report','notice','analysis','stores','entry','admin'];
+const NAV_ICON = { report:'▤', notice:'▥', analysis:'◈', stores:'▦', entry:'✎', admin:'⚙', archive:'⇪' };
+const DEFAULT_NAV_ORDER = ['report','notice','analysis','stores','entry','admin','archive'];
 
 function loadNavOrder(){
   const raw = localStorage.getItem('yfp_nav_order');
@@ -477,6 +478,31 @@ function renderNoticeRoyaltyBlock(brand, dateStr){
 }
 
 function renderNotice(){
+  const monthSel = document.getElementById('noticeMonthSelect');
+  const isArchive = monthSel && monthSel.value !== 'current';
+
+  document.getElementById('noticeSubTab').style.display = isArchive ? 'none' : '';
+  document.getElementById('noticeDate').closest('.toolbar').querySelector('span').style.display = isArchive ? 'none' : '';
+  document.getElementById('noticeDate').style.display = isArchive ? 'none' : '';
+
+  if(isArchive){
+    const a = ARCHIVES[monthSel.value];
+    document.getElementById('noticeSalesContainer').style.display = 'none';
+    document.getElementById('noticeRoyaltyContainer').style.display = 'none';
+    const archiveEl = document.getElementById('noticeArchiveContainer');
+    archiveEl.style.display = '';
+    archiveEl.innerHTML = a ? `
+      <div class="notice-block">
+        <div class="notice-head"><div class="lft"><span class="date-chip">${monthSel.value} 업로드본</span><span class="brand-chip">${a.fileName} · "${a.sheetName}" 시트</span></div></div>
+        <div class="archive-sheet">${a.html}</div>
+      </div>` : `<div class="card">해당 월의 업로드된 마감장표를 찾을 수 없어요.</div>`;
+    return;
+  }
+  document.getElementById('noticeArchiveContainer').style.display = 'none';
+  const activeSub = document.querySelector('#noticeSubTab button.active')?.dataset.sub || 'sales';
+  document.getElementById('noticeSalesContainer').style.display = activeSub==='sales' ? '' : 'none';
+  document.getElementById('noticeRoyaltyContainer').style.display = activeSub==='royalty' ? '' : 'none';
+
   const dateStr = fmtDate(document.getElementById('noticeDate').value || new Date());
   let salesHtml = '';
   BRANDS.forEach((brand,i)=>{ salesHtml += renderNoticeBrandBlock(brand, dateStr, i===0); });
@@ -497,11 +523,15 @@ document.querySelectorAll('#noticeSubTab button').forEach(b=>b.addEventListener(
 }));
 
 function activeNoticeContainerId(){
+  const monthSel = document.getElementById('noticeMonthSelect');
+  if(monthSel && monthSel.value !== 'current') return 'noticeArchiveContainer';
   const active = document.querySelector('#noticeSubTab button.active')?.dataset.sub;
   return active==='royalty' ? 'noticeRoyaltyContainer' : 'noticeSalesContainer';
 }
 function activeNoticeLabel(){
-  return activeNoticeContainerId()==='noticeRoyaltyContainer' ? '로열티현황' : '매출현황';
+  const id = activeNoticeContainerId();
+  if(id==='noticeArchiveContainer') return `${document.getElementById('noticeMonthSelect').value}_업로드본`;
+  return id==='noticeRoyaltyContainer' ? '로열티현황' : '매출현황';
 }
 
 async function copyNoticeAsImage(){
@@ -904,6 +934,70 @@ document.getElementById('adminSaveBtn').addEventListener('click', ()=>{
   renderAll();
 });
 
+/* ---------- 마감장표 업로드(월별 보관) ---------- */
+function loadArchives(){
+  const raw = localStorage.getItem('yfp_archives');
+  if(raw){ try{ return JSON.parse(raw); }catch(e){} }
+  return {}; // { 'YYYY-MM': {fileName, uploadedAt, html} }
+}
+function saveArchives(a){ localStorage.setItem('yfp_archives', JSON.stringify(a)); }
+let ARCHIVES = loadArchives();
+
+function renderArchiveList(){
+  const months = Object.keys(ARCHIVES).sort().reverse();
+  document.getElementById('archiveList').innerHTML = months.length ? months.map(m=>{
+    const a = ARCHIVES[m];
+    return `<tr>
+      <td class="txt" style="font-weight:600">${m}</td>
+      <td class="txt">${a.fileName}</td>
+      <td class="txt" style="font-size:11.5px;color:var(--muted)">${new Date(a.uploadedAt).toLocaleString('ko-KR')}</td>
+      <td><button class="btn ghost small archive-del" data-month="${m}">삭제</button></td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="4" class="txt" style="color:var(--muted)">아직 업로드된 마감장표가 없어요.</td></tr>`;
+  document.querySelectorAll('.archive-del').forEach(b=>b.addEventListener('click', ()=>{
+    if(!confirm(`${b.dataset.month} 마감장표를 삭제할까요?`)) return;
+    delete ARCHIVES[b.dataset.month];
+    saveArchives(ARCHIVES);
+    renderArchiveList();
+    populateNoticeMonthSelect();
+  }));
+}
+
+document.getElementById('archiveUploadBtn').addEventListener('click', async ()=>{
+  const month = document.getElementById('archiveMonth').value;
+  const file = document.getElementById('archiveFile').files[0];
+  if(!month){ showToast('먼저 해당 월을 선택해주세요.'); return; }
+  if(!file){ showToast('업로드할 엑셀 파일을 선택해주세요.'); return; }
+  if(typeof XLSX === 'undefined'){ showToast('엑셀 처리 라이브러리를 불러오지 못했어요. 인터넷 연결을 확인해주세요.'); return; }
+  const btn = document.getElementById('archiveUploadBtn');
+  const original = btn.textContent; btn.textContent = '업로드 중…';
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type:'array' });
+    const sheetName = wb.SheetNames.find(n=>n.includes('마감장표')) || wb.SheetNames[0];
+    const sheet = wb.Sheets[sheetName];
+    const html = XLSX.utils.sheet_to_html(sheet, { editable:false });
+    ARCHIVES[month] = { fileName:file.name, uploadedAt:Date.now(), html, sheetName };
+    saveArchives(ARCHIVES);
+    renderArchiveList();
+    populateNoticeMonthSelect();
+    showToast(`${month} 마감장표("${sheetName}" 시트)를 저장했어요.`);
+    document.getElementById('archiveFile').value = '';
+  }catch(e){
+    showToast('파일을 읽는 데 실패했어요. 엑셀(.xlsx) 파일이 맞는지 확인해주세요.');
+  }
+  btn.textContent = original;
+});
+
+function populateNoticeMonthSelect(){
+  const sel = document.getElementById('noticeMonthSelect');
+  const cur = sel.value;
+  const months = Object.keys(ARCHIVES).sort().reverse();
+  sel.innerHTML = `<option value="current">현재(실시간)</option>` + months.map(m=>`<option value="${m}">${m} (업로드본)</option>`).join('');
+  if([...sel.options].some(o=>o.value===cur)) sel.value = cur;
+}
+document.getElementById('noticeMonthSelect').addEventListener('change', renderNotice);
+
 function renderAll(){
   if(state.view==='report') renderReportTable();
   if(state.view==='notice') renderNotice();
@@ -911,7 +1005,9 @@ function renderAll(){
   if(state.view==='stores') renderStores();
   if(state.view==='entry') renderEntry();
   if(state.view==='admin') renderAdmin();
+  if(state.view==='archive') renderArchiveList();
 }
 initNoticeDate();
+populateNoticeMonthSelect();
 renderNav();
 renderAll();

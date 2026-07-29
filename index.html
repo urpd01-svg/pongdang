@@ -9,6 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root{
     --navy:#101B33;        /* 진남색 - 사이드바/헤더 */
@@ -38,7 +39,6 @@
   .num{ font-family:'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
 
   .shell{ display:grid; grid-template-columns: 232px 1fr; min-height:100vh; }
-  @media (max-width: 860px){ .shell{ grid-template-columns: 1fr; } .side{ display:none; } .side.open{ display:block; } }
 
   .side{ background:var(--navy); color:#DDE3F0; padding:22px 16px; display:flex; flex-direction:column; gap:26px;
     position:sticky; top:0; height:100vh; overflow-y:auto; }
@@ -69,7 +69,7 @@
   .pulse{ width:7px; height:7px; border-radius:50%; background:var(--blue); display:inline-block; box-shadow:0 0 0 0 rgba(43,76,140,.5); animation:pulse 2s infinite; }
   @keyframes pulse{ 0%{box-shadow:0 0 0 0 rgba(43,76,140,.45);} 70%{box-shadow:0 0 0 6px rgba(43,76,140,0);} 100%{box-shadow:0 0 0 0 rgba(43,76,140,0);} }
 
-  .mobile-toggle{ display:none; } @media (max-width:860px){ .mobile-toggle{ display:inline-flex; } }
+  .mobile-toggle{ display:none; }
 
   .view{ display:none; } .view.active{ display:block; animation: rise .2s ease; }
   @keyframes rise{ from{ opacity:0; transform:translateY(4px);} to{opacity:1; transform:translateY(0);} }
@@ -206,12 +206,43 @@
   table.notice tr.total td.hl-cur{ background:#C79A2E; color:#fff; }
   table.notice tr.total td.hl-proj{ background:#C06A2E; color:#fff; }
   .grp-head td{ background:#DDE3F0 !important; font-size:10px; font-weight:700; color:var(--navy-2); text-align:center; }
+  .archive-sheet{ overflow:auto; max-width:100%; padding:14px; background:#fff; }
+  .archive-sheet table{ border-collapse:collapse; font-size:11px; }
+  .archive-sheet td{ border:1px solid #E2E2E2; padding:3px 6px; white-space:nowrap; }
   .updn.up{ color:var(--up); font-weight:700; font-size:11.5px; } .updn.down{ color:var(--down); font-weight:700; font-size:11.5px; }
   table.notice tr.total .updn.up, table.notice tr.total .updn.down{ color:#fff; }
 
   ::-webkit-scrollbar{ width:9px; height:9px; }
   ::-webkit-scrollbar-thumb{ background:#C7CCDA; border-radius:6px; }
-  @media print{ .side, .topbar .right, .notice-toolbar{ display:none !important; } .main{ padding:0; } }
+  @media print{
+    .side, .topbar .right, .notice-toolbar, .mobile-toggle{ display:none !important; }
+    .main{ padding:0; }
+    table.notice{ table-layout:auto; font-size:8.5px; }
+    table.notice th{ font-size:7.5px; padding:4px 3px; }
+    table.notice td{ white-space:normal; word-break:keep-all; padding:4px 3px; }
+    .updn.up, .updn.down{ font-size:8px; }
+    .notice-block{ page-break-inside:avoid; box-shadow:none; margin-bottom:14px; }
+    .notice-head{ padding:6px 10px; }
+  }
+  @media (max-width: 860px){
+    .shell{ grid-template-columns: 1fr; }
+    .side{
+      position:fixed; bottom:0; left:0; right:0; top:auto; width:100%; height:auto;
+      flex-direction:row; align-items:center; padding:6px 4px 4px; gap:0;
+      box-shadow:0 -2px 14px rgba(0,0,0,.18); z-index:40;
+    }
+    .side .brand, .side .side-foot, .side .nav-hint{ display:none; }
+    .nav{ flex-direction:row; width:100%; gap:0; overflow-x:auto; }
+    .nav button{ flex-direction:column; flex:1 0 auto; min-width:64px; gap:2px; padding:7px 2px; border-radius:10px; font-size:9.5px; }
+    .nav button .handle{ display:none; }
+    .nav button ico{ font-size:17px; width:auto; }
+    .main{ padding-bottom:78px; padding-left:14px; padding-right:14px; }
+    .mobile-toggle{ display:none !important; }
+    .topbar{ flex-direction:column; align-items:flex-start; }
+    .kpis{ grid-template-columns:repeat(2,1fr); }
+    .mini-dash{ grid-template-columns:1fr; }
+    .modal{ max-width:94vw; }
+  }
 </style>
 </head>
 <body>
@@ -275,6 +306,8 @@
         <div class="toolbar" style="margin:0;">
           <span style="font-size:12.5px;color:var(--muted)">마감 기준일</span>
           <input type="date" id="noticeDate">
+          <span style="font-size:12.5px;color:var(--muted);margin-left:6px;">조회 월</span>
+          <select id="noticeMonthSelect"><option value="current">현재(실시간)</option></select>
           <div class="seg" id="noticeSubTab" style="margin-left:8px;">
             <button data-sub="sales" class="active">매출현황</button>
             <button data-sub="royalty">로열티현황</button>
@@ -287,6 +320,7 @@
       </div>
       <div id="noticeSalesContainer"></div>
       <div id="noticeRoyaltyContainer" style="display:none;"></div>
+      <div id="noticeArchiveContainer" style="display:none;"></div>
     </section>
 
     <section class="view" id="view-analysis">
@@ -342,11 +376,30 @@
         <button class="btn" id="adminSaveBtn">전체 저장</button>
       </div>
     </section>
+
+    <section class="view" id="view-archive">
+      <div class="card" style="margin-bottom:16px;">
+        <div style="font-size:12.5px;color:var(--muted)">매월 마감이 끝난 엑셀 마감장표 파일을 올려두면, 공지용 마감장표에서 "조회 월"로 그 달을 선택해 그때의 마감장표 시트를 그대로 다시 볼 수 있어요. (파일 안에 "마감장표"라는 이름의 시트를 찾아서 보여줘요 — 없으면 첫 번째 시트를 사용해요.)</div>
+      </div>
+      <div class="card" style="margin-bottom:20px;">
+        <div class="toolbar" style="margin-bottom:0;">
+          <span style="font-size:12.5px;color:var(--muted)">해당 월</span>
+          <input type="month" id="archiveMonth">
+          <input type="file" id="archiveFile" accept=".xlsx,.xls">
+          <button class="btn" id="archiveUploadBtn">업로드</button>
+        </div>
+      </div>
+      <div class="section-title"><span class="bar"></span>업로드된 월별 마감장표</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th style="text-align:left">월</th><th style="text-align:left">파일명</th><th style="text-align:left">업로드 시각</th><th>관리</th></tr></thead>
+        <tbody id="archiveList"></tbody>
+      </table></div>
+    </section>
   </main>
 </div>
 
 <div class="overlay" id="overlay"><div class="modal" id="modalBody"></div></div>
 <div class="toast" id="toast"></div>
-<script src="app.js?v=20260729p"></script>
+<script src="app.js?v=20260729q"></script>
 </body>
 </html>
