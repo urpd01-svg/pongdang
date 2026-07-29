@@ -48,12 +48,37 @@ const PERIODS = ['당월누적','전일','토요일','전월','전년동월'];
 const PERIOD_DAYS_DEFAULT = { '당월누적':26, '전일':1, '토요일':1, '전월':30, '전년동월':28 };
 const MONTH_TOTAL_DAYS = 31;
 
+/* ---------- 기준일(마감 기준일) 자동 계산 — 기본값: 어제 ---------- */
+function defaultRefDate(){
+  const d = new Date(); d.setDate(d.getDate()-1);
+  return d.toISOString().slice(0,10);
+}
+function getRefDate(){ return state.refDate || defaultRefDate(); }
+function daysInMonthOffset(dateStr, monthOffset){
+  const d = new Date(dateStr);
+  return new Date(d.getFullYear(), d.getMonth()+1+monthOffset, 0).getDate();
+}
+function bizDaysElapsed(dateStr){ return new Date(dateStr).getDate(); }
+function autoDaysFor(period){
+  const ref = getRefDate();
+  if(period==='당월누적') return bizDaysElapsed(ref);
+  if(period==='전일' || period==='토요일') return 1;
+  if(period==='전월') return daysInMonthOffset(ref, -1);
+  if(period==='전년동월') return daysInMonthOffset(ref, -12);
+  return PERIOD_DAYS_DEFAULT[period] || 30;
+}
+
 /* ---------- 포스별 원본 컬럼 스키마 (그대로 붙여넣기용) ---------- */
+const TEXT_FIELDS = new Set(['매장명','매장코드','매출일자']);
 const POS_SCHEMA = {
-  'OK포스':      { fields:['영업일수','영수건수','영수단가','실매출액','가액','부가세','총할인액'], sales:'실매출액', receipts:'영수건수', days:'영업일수' },
-  '업솔루션':    { fields:['영업일수','전표수','공급가액','세금','매출액'],                          sales:'매출액',   receipts:'전표수',   days:'영업일수' },
-  '유니온포스':  { fields:['영업일수','영수건수','실매출액','객단가','단순현금','신용카드','할인합계'], sales:'실매출액', receipts:'영수건수', days:'영업일수' },
-  '유플러스포스':{ fields:['영업일수','영수건수','영수단가','매출금액','순매출','현금매출','카드매출'], sales:'매출금액', receipts:'영수건수', days:'영업일수' },
+  'OK포스':      { fields:['매장명','총매출액','총할인액','실매출액','가액','부가세','영업일수','일평균 실매출액','영수건수','영수단가','객수','객단가','점유율(%)','결제합계','단순현금','현금영수','신용카드'],
+                    storeField:'매장명', sales:'실매출액', receipts:'영수건수', days:'영업일수' },
+  '업솔루션':    { fields:['매장명','전표수','공급가액','세금','매출액'],
+                    storeField:'매장명', sales:'매출액', receipts:'전표수', days:null },
+  '유니온포스':  { fields:['매장명','건수','결제합계','객단가','현금','카드','포인트','외상','기타','할인합계'],
+                    storeField:'매장명', sales:'결제합계', receipts:'건수', days:null },
+  '유플러스포스':{ fields:['매장코드','매장명','매출일자','수량','객수','객단가','영수건수','영수단가','총판매금액','총반품금액','총 매출 금액','할인 금액','순매출','매출 금액','현금매출','카드매출','간편결제매출','상품권매출','포인트매출','오더주문매출','즉시환급매출','기타매출'],
+                    storeField:'매장명', sales:'매출 금액', receipts:'영수건수', days:null },
 };
 const POS_LIST = Object.keys(POS_SCHEMA);
 
@@ -67,12 +92,21 @@ function seedSales(){
       const dayAvg = 1_700_000 + Math.round(Math.random()*1_600_000);
       const sales = Math.round(dayAvg * scale * (0.85+Math.random()*0.3));
       const receipts = Math.round(sales / (11000 + Math.random()*6000));
-      const rec = { 영업일수:scale, 실매출액:sales, 매출액:sales, 매출금액:sales,
-        영수건수:receipts, 전표수:receipts,
+      const rec = {
+        총매출액:sales, 실매출액:sales, 매출액:sales, 결제합계:sales, '매출 금액':sales, 순매출:sales,
+        영업일수:scale, '일평균 실매출액': Math.round(sales/(scale||1)),
+        영수건수:receipts, 전표수:receipts, 건수:receipts,
         영수단가: Math.round(sales/(receipts||1)), 객단가: Math.round(sales/(receipts||1)),
+        객수: Math.round(receipts*1.05),
         가액: Math.round(sales/1.1), 부가세: Math.round(sales-sales/1.1), 총할인액: Math.round(sales*0.02),
+        '점유율(%)': +(3+Math.random()*10).toFixed(2), 현금영수: 0,
         단순현금: Math.round(sales*0.25), 신용카드: Math.round(sales*0.7), 할인합계: Math.round(sales*0.02),
-        순매출: sales, 현금매출: Math.round(sales*0.25), 카드매출: Math.round(sales*0.7),
+        현금: Math.round(sales*0.25), 카드: Math.round(sales*0.7), 포인트: Math.round(sales*0.02), 외상:0, 기타:0,
+        공급가액: Math.round(sales/1.1), 세금: Math.round(sales-sales/1.1),
+        수량: Math.round(receipts*1.3), 총판매금액: sales, 총반품금액: 0, '총 매출 금액': sales, '할인 금액': Math.round(sales*0.02),
+        현금매출: Math.round(sales*0.25), 카드매출: Math.round(sales*0.6), 간편결제매출: Math.round(sales*0.1),
+        상품권매출:0, 포인트매출: Math.round(sales*0.03), 오더주문매출: Math.round(sales*0.02), 즉시환급매출:0, 기타매출:0,
+        매장코드: `ST${String(s.id+1).padStart(3,'0')}`, 매출일자: '',
       };
       base[period][s.name] = rec;
     });
@@ -102,14 +136,15 @@ function metricsFor(storeName, period){
   const schema = POS_SCHEMA[store.pos];
   const sales = +rec[schema.sales] || 0;
   const receipts = +rec[schema.receipts] || 0;
-  const days = +rec[schema.days] || 0;
+  const days = schema.days ? (+rec[schema.days] || 0) : autoDaysFor(period);
   return { days, receipts, sales, dayAvg: sales/(days||1), unit: receipts ? sales/receipts : 0 };
 }
 function projectedClose(storeName){
   const cur = metricsFor(storeName,'당월누적');
   if(!cur) return 0;
-  const baseDays = cur.days || PERIOD_DAYS_DEFAULT['당월누적'];
-  return cur.sales / baseDays * MONTH_TOTAL_DAYS;
+  const baseDays = cur.days || bizDaysElapsed(getRefDate());
+  const totalDays = daysInMonthOffset(getRefDate(), 0);
+  return cur.sales / baseDays * totalDays;
 }
 function momChange(storeName){
   const proj = projectedClose(storeName);
@@ -125,7 +160,7 @@ function yoyChange(storeName){
 }
 
 /* ---------- 상태 ---------- */
-let state = { view:'report', reportBrand:'전체', reportPeriod:'당월누적', storeBrand:'전체', storeQuery:'', entryPeriod:'당월누적', entryPos:'OK포스' };
+let state = { view:'report', reportBrand:'전체', reportPeriod:'당월누적', storeBrand:'전체', storeQuery:'', entryPeriod:'당월누적', entryPos:'OK포스', refDate: defaultRefDate() };
 let charts = {};
 
 const TITLES = {
@@ -197,8 +232,11 @@ document.querySelectorAll('#periodFilter button').forEach(b=>b.addEventListener(
 /* ---------- 공지용 마감장표 ---------- */
 function initNoticeDate(){
   const el = document.getElementById('noticeDate');
-  if(!el.value) el.value = new Date().toISOString().slice(0,10);
-  el.addEventListener('change', renderNotice);
+  el.value = state.refDate;
+  el.addEventListener('change', ()=>{
+    state.refDate = el.value || defaultRefDate();
+    renderAll();
+  });
 }
 function fmtDate(iso){ const d=new Date(iso); return `${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`; }
 
@@ -465,24 +503,28 @@ function renderEntry(){
   const rows = STORES.filter(s=>s.pos===pos);
   const grid = document.getElementById('entryGrid');
   grid.innerHTML = `
-    <thead><tr><th>지점명</th>${schema.fields.map(f=>`<th>${f}</th>`).join('')}</tr></thead>
+    <thead><tr>${schema.fields.map(f=>`<th>${f}</th>`).join('')}</tr></thead>
     <tbody>${rows.map(s=>{
       const rec = SALES[period]?.[s.name] || {};
-      return `<tr data-store="${s.name}">
-        <td class="fixed">${s.short}</td>
-        ${schema.fields.map(f=>`<td><input type="number" data-field="${f}" value="${rec[f] ?? ''}"></td>`).join('')}
+      return `<tr>
+        ${schema.fields.map(f=>{
+          const isText = TEXT_FIELDS.has(f);
+          const val = f===schema.storeField ? s.name : (rec[f] ?? '');
+          return `<td><input type="${isText?'text':'number'}" data-field="${f}" value="${val}" style="${isText?'text-align:left;font-weight:600;':''}"></td>`;
+        }).join('')}
       </tr>`;
     }).join('')}</tbody>`;
   attachPasteHandler(grid);
 }
 
 function attachPasteHandler(grid){
+  const schema = POS_SCHEMA[state.entryPos];
   const inputs = Array.from(grid.querySelectorAll('input'));
-  const cols = POS_SCHEMA[state.entryPos].fields.length;
+  const cols = schema.fields.length;
   inputs.forEach((inp, idx)=>{
     inp.addEventListener('paste', (e)=>{
       const text = (e.clipboardData || window.clipboardData).getData('text');
-      if(!text.includes('\t') && !text.includes('\n')) return; // 일반 단일값 붙여넣기는 기본 동작
+      if(!text.includes('\t') && !text.includes('\n')) return; // 단일 값 붙여넣기는 기본 동작
       e.preventDefault();
       const rows = text.replace(/\r/g,'').split('\n').filter(r=>r.length);
       const startRow = Math.floor(idx / cols);
@@ -493,24 +535,47 @@ function attachPasteHandler(grid){
           const targetRow = startRow + rOff;
           const targetCol = startCol + cOff;
           const targetIdx = targetRow*cols + targetCol;
-          const numeric = val.replace(/[^0-9.\-]/g,'');
-          if(inputs[targetIdx] && numeric!=='') inputs[targetIdx].value = numeric;
+          const target = inputs[targetIdx];
+          if(!target) return;
+          if(TEXT_FIELDS.has(target.dataset.field)){
+            target.value = val.trim();
+          }else{
+            const numeric = val.replace(/[^0-9.\-]/g,'');
+            if(numeric!=='') target.value = numeric;
+          }
         });
       });
     });
   });
 }
 
+function matchStore(pastedName, pos){
+  const candidates = STORES.filter(s=>s.pos===pos);
+  let hit = candidates.find(s=>s.name === pastedName);
+  if(!hit) hit = candidates.find(s=>pastedName.includes(s.short) || s.name.includes(pastedName));
+  return hit;
+}
+
 document.getElementById('saveBtn').addEventListener('click', ()=>{
-  const period = state.entryPeriod;
+  const period = state.entryPeriod, pos = state.entryPos;
+  const schema = POS_SCHEMA[pos];
+  let unmatched = [];
   document.querySelectorAll('#entryGrid tbody tr').forEach(row=>{
-    const store = row.dataset.store;
-    const rec = SALES[period][store] || {};
-    row.querySelectorAll('input').forEach(inp=>{ rec[inp.dataset.field] = +inp.value || 0; });
-    SALES[period][store] = rec;
+    const inputs = row.querySelectorAll('input');
+    const nameInput = Array.from(inputs).find(i=>i.dataset.field===schema.storeField);
+    const pastedName = nameInput.value.trim();
+    const store = matchStore(pastedName, pos);
+    if(!store){ unmatched.push(pastedName || '(빈 칸)'); return; }
+    const rec = SALES[period][store.name] || {};
+    inputs.forEach(inp=>{ rec[inp.dataset.field] = TEXT_FIELDS.has(inp.dataset.field) ? inp.value : (+inp.value || 0); });
+    SALES[period][store.name] = rec;
   });
   saveSales(SALES);
-  showToast('저장했어요 — 매출장표 · 공지용 마감장표에 반영됐어요.');
+  if(unmatched.length){
+    showToast(`저장했어요. 다만 지점명을 못 찾은 줄이 있어요: ${unmatched.slice(0,3).join(', ')}`);
+  }else{
+    showToast('저장했어요 — 매출장표 · 공지용 마감장표에 반영됐어요.');
+  }
   renderAll();
 });
 document.getElementById('resetBtn').addEventListener('click', ()=>{
