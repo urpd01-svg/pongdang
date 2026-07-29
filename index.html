@@ -113,14 +113,15 @@
   .seg button{ all:unset; cursor:pointer; font-size:12px; padding:6px 12px; border-radius:7px; color:var(--navy-2); font-weight:600; }
   .seg button.active{ background:var(--navy); color:#fff; }
 
-  .btn{ all:unset; cursor:pointer; font-size:12.5px; font-weight:700; padding:9px 15px; border-radius:8px; background:var(--blue); color:#fff; }
+  .btn{ all:unset; box-sizing:border-box; cursor:pointer; font-size:12.5px; font-weight:700; padding:9px 15px; border-radius:8px; background:var(--blue); color:#fff; }
   .btn:hover{ filter:brightness(1.1); }
   .btn.ghost{ background:transparent; color:var(--ink); border:1px solid var(--line); }
   .btn.small{ padding:6px 10px; font-size:11.5px; }
   .btn.dark{ background:var(--navy); }
 
   .store-grid{ grid-template-columns:repeat(auto-fill, minmax(272px,1fr)); }
-  .store-card{ cursor:pointer; transition:transform .15s, box-shadow .15s; }
+  .store-card{ cursor:pointer; transition:transform .15s, box-shadow .15s; display:flex; flex-direction:column; }
+  .store-card .detail-btn{ display:block; box-sizing:border-box; width:100%; margin-top:14px; text-align:center; }
   .store-card:hover{ transform:translateY(-2px); box-shadow:0 4px 8px rgba(16,27,51,.08), 0 14px 26px rgba(16,27,51,.1); }
   .store-card .head{ display:flex; justify-content:space-between; align-items:flex-start; }
   .store-card h3{ margin:0; font-size:15px; font-weight:700; }
@@ -175,6 +176,11 @@
   .mini-title{ font-size:11.5px; font-weight:700; color:var(--navy-2); margin-bottom:8px; }
   @media (max-width:900px){ .mini-dash{ grid-template-columns:1fr; } }
   .two-col{ grid-template-columns: 1.3fr .9fr; } @media (max-width:900px){ .two-col{ grid-template-columns:1fr; } }
+  .brand-rank-grid{ grid-template-columns:repeat(2, 1fr); }
+  @media (max-width:900px){ .brand-rank-grid{ grid-template-columns:1fr; } }
+  .brand-rank-card{ padding:0; overflow:hidden; }
+  .brand-rank-head{ padding:11px 16px; font-weight:700; font-size:13px; color:#fff; display:flex; justify-content:space-between; align-items:center; }
+  .brand-rank-card .table-scroll{ max-height:260px; overflow:auto; }
 
   .notice-toolbar{ display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; flex-wrap:wrap; gap:10px; }
   .notice-block{ margin-bottom:26px; border-radius:12px; overflow:hidden; box-shadow:var(--shadow); border:1px solid var(--line); }
@@ -284,11 +290,8 @@
         <div class="card chart-card"><div class="section-title" style="margin-top:0"><span class="bar"></span>브랜드별 당월 매출 비중</div><canvas id="brandPie"></canvas></div>
         <div class="card chart-card"><div class="section-title" style="margin-top:0"><span class="bar"></span>전월 · 전년동월 대비</div><canvas id="compareBar"></canvas></div>
       </div>
-      <div class="section-title"><span class="bar"></span>상위 · 하위 성과 매장</div>
-      <div class="grid two-col">
-        <div class="table-wrap"><table><thead><tr><th style="text-align:left">TOP 5</th><th>실매출액</th><th>전월대비</th></tr></thead><tbody id="topBody"></tbody></table></div>
-        <div class="table-wrap"><table><thead><tr><th style="text-align:left">주의 필요 매장</th><th>실매출액</th><th>전월대비</th></tr></thead><tbody id="bottomBody"></tbody></table></div>
-      </div>
+      <div class="section-title"><span class="bar"></span>브랜드별 매장 순위</div>
+      <div class="grid brand-rank-grid" id="brandRankGrid"></div>
     </section>
 
     <section class="view" id="view-stores">
@@ -340,6 +343,6 @@
 
 <div class="overlay" id="overlay"><div class="modal" id="modalBody"></div></div>
 <div class="toast" id="toast"></div>
-<script src="app.js?v=20260729l"></script>
+<script src="app.js?v=20260729n"></script>
 </body>
 </html>

@@ -569,13 +569,25 @@ function renderAnalysis(){
   renderRankTables();
 }
 function renderRankTables(){
-  const ranked = STORES.map(s=>({s, sales:metricsFor(s.name,'당월누적')?.sales||0, mom:momChange(s.name)})).sort((a,b)=>b.sales-a.sales);
-  const top = ranked.slice(0,5);
-  const bottom = [...ranked].sort((a,b)=> (a.mom??0) - (b.mom??0)).slice(0,5);
-  const rowTpl = r => `<tr><td style="text-align:left;font-weight:600">${r.s.short}<span class="brand-tag tag-${r.s.brand}">${r.s.brand}</span></td>
-    <td class="num">${won(r.sales)}</td><td>${r.mom==null?'-':`<span class="pill ${r.mom>=0?'up':'down'}">${pct(r.mom)}</span>`}</td></tr>`;
-  document.getElementById('topBody').innerHTML = top.map(rowTpl).join('');
-  document.getElementById('bottomBody').innerHTML = bottom.map(rowTpl).join('');
+  const grid = document.getElementById('brandRankGrid');
+  grid.innerHTML = BRANDS.map(brand=>{
+    const list = STORES.filter(s=>s.brand===brand)
+      .map(s=>({s, sales:metricsFor(s.name,'당월누적')?.sales||0, mom:momChange(s.name)}))
+      .sort((a,b)=>b.sales-a.sales);
+    const rows = list.map((r,i)=>`
+      <tr><td style="width:26px;color:var(--muted)">${i+1}</td>
+        <td style="text-align:left;font-weight:600">${r.s.short}</td>
+        <td class="num">${won(r.sales)}</td>
+        <td>${r.mom==null?'<span class="pill flat">-</span>':`<span class="pill ${r.mom>=0?'up':'down'}">${r.mom>=0?'▲':'▼'} ${pct(r.mom)}</span>`}</td></tr>`).join('');
+    return `
+    <div class="card brand-rank-card">
+      <div class="brand-rank-head" style="background:${BRAND_COLORS[brand]}"><span>${brand}</span><span style="font-weight:400;font-size:11.5px;opacity:.85">${list.length}개 지점</span></div>
+      <div class="table-scroll"><table>
+        <thead><tr><th style="width:26px"></th><th style="text-align:left">지점명</th><th>실매출액</th><th>전월대비</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    </div>`;
+  }).join('');
 }
 
 /* ---------- 매장별현황 ---------- */
@@ -595,7 +607,7 @@ function renderStores(){
         <div class="frow proj"><div class="lbl">당월 예상마감</div><div class="num">${won(projectedClose(s.name))}</div></div>
       </div>
       <div class="gauge-wrap"><div class="gauge-fill" style="width:${pctGauge}%"></div></div>
-      <button class="btn ghost small detail-btn" data-id="${s.id}" style="margin-top:14px;width:100%;">상세보기 →</button>
+      <button class="btn ghost small detail-btn" data-id="${s.id}">상세보기 →</button>
     </div>`;
   }).join('');
   document.querySelectorAll('.store-card').forEach(el=>el.addEventListener('click', (e)=>{
