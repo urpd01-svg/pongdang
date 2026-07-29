@@ -579,6 +579,14 @@ function renderRankTables(){
         <td style="text-align:left;font-weight:600">${r.s.short}</td>
         <td class="num">${won(r.sales)}</td>
         <td>${r.mom==null?'<span class="pill flat">-</span>':`<span class="pill ${r.mom>=0?'up':'down'}">${r.mom>=0?'▲':'▼'} ${pct(r.mom)}</span>`}</td></tr>`).join('');
+
+    const watch = list.filter(r=>r.mom!=null && r.mom<0).sort((a,b)=>a.mom-b.mom).slice(0,3);
+    const watchHtml = watch.length ? `
+      <div class="watch-box">
+        <div class="watch-title">⚠ 주의 필요 매장</div>
+        ${watch.map(r=>`<div class="watch-row"><span>${r.s.short}</span><span class="pill down">▼ ${pct(r.mom)}</span></div>`).join('')}
+      </div>` : `<div class="watch-box ok">모든 지점이 전월 대비 상승 중이에요</div>`;
+
     return `
     <div class="card brand-rank-card">
       <div class="brand-rank-head" style="background:${BRAND_COLORS[brand]}"><span>${brand}</span><span style="font-weight:400;font-size:11.5px;opacity:.85">${list.length}개 지점</span></div>
@@ -586,6 +594,7 @@ function renderRankTables(){
         <thead><tr><th style="width:26px"></th><th style="text-align:left">지점명</th><th>실매출액</th><th>전월대비</th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>
+      ${watchHtml}
     </div>`;
   }).join('');
 }
