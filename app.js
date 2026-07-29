@@ -189,19 +189,74 @@ const TITLES = {
   stores:['매장별현황','지점 기본정보 및 최근 실적'],
   entry:['매출 데이터 입력','포스 화면 표를 그대로 붙여넣으세요'],
 };
-document.querySelectorAll('#nav button').forEach(btn=>{
-  btn.addEventListener('click', ()=>{
-    document.querySelectorAll('#nav button').forEach(b=>b.classList.remove('active'));
-    btn.classList.add('active');
-    const v = btn.dataset.view; state.view = v;
-    document.querySelectorAll('.view').forEach(s=>s.classList.remove('active'));
-    document.getElementById('view-'+v).classList.add('active');
-    document.getElementById('pageTitle').textContent = TITLES[v][0];
-    document.getElementById('pageSub').textContent = TITLES[v][1];
-    document.getElementById('side').classList.remove('open');
-    renderAll();
+const NAV_ICON = { report:'▤', notice:'▥', analysis:'◈', stores:'▦', entry:'✎' };
+const DEFAULT_NAV_ORDER = ['report','notice','analysis','stores','entry'];
+
+function loadNavOrder(){
+  const raw = localStorage.getItem('yfp_nav_order');
+  if(raw){
+    try{
+      const arr = JSON.parse(raw);
+      if(Array.isArray(arr) && DEFAULT_NAV_ORDER.every(v=>arr.includes(v)) && arr.length===DEFAULT_NAV_ORDER.length) return arr;
+    }catch(e){}
+  }
+  return DEFAULT_NAV_ORDER.slice();
+}
+function saveNavOrder(order){ localStorage.setItem('yfp_nav_order', JSON.stringify(order)); }
+
+function renderNav(){
+  const order = loadNavOrder();
+  const nav = document.getElementById('nav');
+  nav.innerHTML = order.map(v=>`
+    <button data-view="${v}" draggable="true" class="${v===state.view?'active':''}">
+      <span class="handle">⠿</span><ico>${NAV_ICON[v]}</ico> ${TITLES[v][0]}
+    </button>`).join('');
+  bindNavClicks();
+  bindNavDrag();
+}
+
+function bindNavClicks(){
+  document.querySelectorAll('#nav button').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      if(btn.classList.contains('dragging')) return;
+      document.querySelectorAll('#nav button').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      const v = btn.dataset.view; state.view = v;
+      document.querySelectorAll('.view').forEach(s=>s.classList.remove('active'));
+      document.getElementById('view-'+v).classList.add('active');
+      document.getElementById('pageTitle').textContent = TITLES[v][0];
+      document.getElementById('pageSub').textContent = TITLES[v][1];
+      document.getElementById('side').classList.remove('open');
+      renderAll();
+    });
   });
-});
+}
+
+function bindNavDrag(){
+  const nav = document.getElementById('nav');
+  let dragEl = null;
+  nav.querySelectorAll('button').forEach(btn=>{
+    btn.addEventListener('dragstart', (e)=>{
+      dragEl = btn; btn.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    btn.addEventListener('dragend', ()=>{
+      btn.classList.remove('dragging');
+      nav.querySelectorAll('button').forEach(b=>b.classList.remove('drag-over'));
+      const newOrder = Array.from(nav.querySelectorAll('button')).map(b=>b.dataset.view);
+      saveNavOrder(newOrder);
+    });
+    btn.addEventListener('dragover', (e)=>{
+      e.preventDefault();
+      if(btn===dragEl) return;
+      const rect = btn.getBoundingClientRect();
+      const before = (e.clientY - rect.top) < rect.height/2;
+      nav.querySelectorAll('button').forEach(b=>b.classList.remove('drag-over'));
+      btn.classList.add('drag-over');
+      btn.parentNode.insertBefore(dragEl, before ? btn : btn.nextSibling);
+    });
+  });
+}
 document.getElementById('mobileToggle').addEventListener('click', ()=>document.getElementById('side').classList.toggle('open'));
 
 /* ---------- 매출장표 ---------- */
@@ -227,6 +282,7 @@ function renderReportTable(){
   const list = filteredStores(state.reportBrand);
   const period = state.reportPeriod;
   renderReportKpis(list, period);
+  renderMiniDashboard(list, period);
   const rows = list.map(s=>{
     const m = metricsFor(s.name, period) || {days:0,receipts:0,sales:0,dayAvg:0,unit:0};
     return { s, m, proj: projectedClose(s.name), mom: momChange(s.name) };
@@ -238,6 +294,40 @@ function renderReportTable(){
       <td class="num" style="font-weight:700">${won(r.m.sales)}</td><td class="num">${won(r.m.dayAvg)}</td>
       <td class="num">${won(r.proj)}</td>
       <td>${r.mom==null?'<span class="pill flat">-</span>':`<span class="pill ${r.mom>=0?'up':'down'}">${r.mom>=0?'▲':'▼'} ${pct(r.mom)}</span>`}</td></tr>`).join('');
+}
+
+let miniCharts = {};
+function renderMiniDashboard(list, period){
+  if(typeof Chart === 'undefined') return;
+  const miniOpts = { plugins:{legend:{display:false}}, responsive:true, maintainAspectRatio:false };
+
+  // ① 브랜드 비중 (필터 무관하게 전체 기준)
+  const brandTotals = {}; BRANDS.forEach(b=>brandTotals[b]=0);
+  STORES.forEach(s=>{ brandTotals[s.brand] += metricsFor(s.name,period)?.sales||0; });
+  if(miniCharts.brand) miniCharts.brand.destroy();
+  miniCharts.brand = new Chart(document.getElementById('miniBrandChart'), {
+    type:'doughnut',
+    data:{ labels:BRANDS, datasets:[{ data:BRANDS.map(b=>brandTotals[b]), backgroundColor:['#2B4C8C','#1B2C50','#6C749A','#101B33'], borderWidth:2, borderColor:'#fff' }] },
+    options:{ ...miniOpts, plugins:{legend:{position:'bottom', labels:{boxWidth:8, font:{size:9}}}} }
+  });
+
+  // ② TOP5 매장 (현재 필터 기준)
+  const ranked = list.map(s=>({name:s.short, sales:metricsFor(s.name,period)?.sales||0})).sort((a,b)=>b.sales-a.sales).slice(0,5);
+  if(miniCharts.top) miniCharts.top.destroy();
+  miniCharts.top = new Chart(document.getElementById('miniTopChart'), {
+    type:'bar',
+    data:{ labels:ranked.map(r=>r.name), datasets:[{ data:ranked.map(r=>r.sales), backgroundColor:'#2B4C8C', borderRadius:4 }] },
+    options:{ ...miniOpts, indexAxis:'y', scales:{ x:{ ticks:{ display:false }, grid:{display:false} }, y:{ ticks:{font:{size:9}}, grid:{display:false} } } }
+  });
+
+  // ③ 기간별 합계매출 비교
+  const periodTotals = PERIODS.map(p=> list.reduce((a,s)=>a+(metricsFor(s.name,p)?.sales||0),0));
+  if(miniCharts.trend) miniCharts.trend.destroy();
+  miniCharts.trend = new Chart(document.getElementById('miniTrendChart'), {
+    type:'bar',
+    data:{ labels:PERIODS, datasets:[{ data:periodTotals, backgroundColor:'#1B2C50', borderRadius:4 }] },
+    options:{ ...miniOpts, scales:{ x:{ ticks:{font:{size:9}}, grid:{display:false} }, y:{ ticks:{display:false}, grid:{display:false} } } }
+  });
 }
 document.querySelectorAll('#brandFilter button').forEach(b=>b.addEventListener('click',()=>{
   document.querySelectorAll('#brandFilter button').forEach(x=>x.classList.remove('active'));
@@ -297,7 +387,6 @@ function renderNoticeBrandBlock(brand, dateStr, showSortLabel){
       <div class="lft"><span class="date-chip">${dateStr} 마감 기준</span><span class="brand-chip">${brand}</span></div>
       ${showSortLabel ? '<div class="hint">매출 내림차순 정렬</div>' : ''}
     </div>
-    <div style="overflow-x:auto">
     <table class="notice">
       <colgroup>
         <col style="width:4%"><col style="width:6%"><col style="width:9%"><col style="width:8%">
@@ -334,7 +423,6 @@ function renderNoticeBrandBlock(brand, dateStr, showSortLabel){
         </tr>
       </tbody>
     </table>
-    </div>
   </div>`;
 }
 
@@ -358,7 +446,6 @@ function renderNoticeRoyaltyBlock(brand, dateStr){
   return `
   <div class="notice-block">
     <div class="notice-head"><div class="lft"><span class="date-chip">${dateStr} 마감 기준</span><span class="brand-chip">${brand} · 로열티현황 (개설순)</span></div></div>
-    <div style="overflow-x:auto">
     <table class="notice">
       <colgroup>
         <col style="width:6%"><col style="width:8%"><col style="width:14%"><col style="width:12%">
@@ -370,7 +457,6 @@ function renderNoticeRoyaltyBlock(brand, dateStr){
         <tr class="total"><td colspan="4" class="txt">계</td><td>${won(sumCur)}</td><td>${won(sumProj)}</td><td>-</td><td class="hl-cur">${won(sumRoyCur)}</td><td class="hl-proj">${won(sumRoyProj)}</td></tr>
       </tbody>
     </table>
-    </div>
   </div>`;
 }
 
@@ -493,9 +579,16 @@ function renderStores(){
         <div class="frow proj"><div class="lbl">당월 예상마감</div><div class="num">${won(projectedClose(s.name))}</div></div>
       </div>
       <div class="gauge-wrap"><div class="gauge-fill" style="width:${pctGauge}%"></div></div>
+      <button class="btn ghost small detail-btn" data-id="${s.id}" style="margin-top:14px;width:100%;">상세보기 →</button>
     </div>`;
   }).join('');
-  document.querySelectorAll('.store-card').forEach(el=>el.addEventListener('click', ()=>openStoreModal(+el.dataset.id)));
+  document.querySelectorAll('.store-card').forEach(el=>el.addEventListener('click', (e)=>{
+    if(e.target.closest('.detail-btn')) return; // 버튼 클릭은 아래 핸들러가 처리
+    openStoreModal(+el.dataset.id);
+  }));
+  document.querySelectorAll('.detail-btn').forEach(el=>el.addEventListener('click', (e)=>{
+    e.stopPropagation(); openStoreModal(+el.dataset.id);
+  }));
 }
 document.querySelectorAll('#brandFilter2 button').forEach(b=>b.addEventListener('click',()=>{
   document.querySelectorAll('#brandFilter2 button').forEach(x=>x.classList.remove('active'));
@@ -503,29 +596,48 @@ document.querySelectorAll('#brandFilter2 button').forEach(b=>b.addEventListener(
 }));
 document.getElementById('storeSearch').addEventListener('input', e=>{ state.storeQuery=e.target.value; renderStores(); });
 
+let storeModalChart = null;
 function openStoreModal(id){
   const s = STORES.find(x=>x.id===id);
   const cur = metricsFor(s.name,'당월누적');
   const mom = momChange(s.name), yoy = yoyChange(s.name);
   const proj = projectedClose(s.name);
+  document.getElementById('modalBody').classList.add('modal-wide');
   document.getElementById('modalBody').innerHTML = `
     <span class="close" id="modalClose">✕</span>
     <h2>${s.short} <span class="brand-tag tag-${s.brand}">${s.brand}</span></h2>
-    <div style="font-size:12.5px;color:var(--muted)">${s.region} · ${s.pos} 연동</div>
+    <div style="font-size:12.5px;color:var(--muted)">${s.region} · ${s.pos} 연동 · 상세분석</div>
+
+    <div class="grid kpis" style="grid-template-columns:repeat(4,1fr);margin-top:16px;">
+      <div class="card kpi" style="padding:12px;"><div class="label">당월누적</div><div class="value" style="font-size:16px;">${won(cur?.sales)}</div></div>
+      <div class="card kpi" style="padding:12px;"><div class="label">예상마감</div><div class="value" style="font-size:16px;">${won(proj)}</div></div>
+      <div class="card kpi" style="padding:12px;"><div class="label">전월대비</div><div class="value ${mom>=0?'delta up':'delta down'}" style="font-size:16px;">${mom==null?'-':pct(mom)}</div></div>
+      <div class="card kpi" style="padding:12px;"><div class="label">전년동월대비</div><div class="value ${yoy>=0?'delta up':'delta down'}" style="font-size:16px;">${yoy==null?'-':pct(yoy)}</div></div>
+    </div>
+
+    <div class="mini-title" style="margin-top:20px;">기간별 실매출액 비교</div>
+    <canvas id="storeModalChart" style="max-height:180px;"></canvas>
+
     <div class="kv">
       <div class="k">개점일</div><div class="v">${s.opened}</div>
       <div class="k">전용면적</div><div class="v">${s.area}평</div>
       <div class="k">월 임대료</div><div class="v">${s.rent}만원</div>
       <div class="k">로열티율</div><div class="v">${s.royaltyFixed ? `정액 ${won(s.royaltyFixed)}원` : royPct(s.royalty)}</div>
-      <div class="k">당월누적 실매출액</div><div class="v num">${won(cur?.sales)}원</div>
-      <div class="k">당월 예상마감</div><div class="v num">${won(proj)}원</div>
-      <div class="k">예상 로열티(마감기준)</div><div class="v num">${won(proj*s.royalty)}원</div>
-      <div class="k">전월대비</div><div class="v">${mom==null?'-':pct(mom)}</div>
-      <div class="k">전년동월대비</div><div class="v">${yoy==null?'-':pct(yoy)}</div>
+      <div class="k">예상 로열티(마감기준)</div><div class="v num">${won(s.royaltyFixed || proj*s.royalty)}원</div>
       <div class="k">평당 매출(예상마감 기준)</div><div class="v num">${won(proj/s.area)}원</div>
     </div>`;
   document.getElementById('overlay').classList.add('open');
   document.getElementById('modalClose').addEventListener('click', closeModal);
+
+  if(typeof Chart !== 'undefined'){
+    const vals = PERIODS.map(p=>metricsFor(s.name,p)?.sales||0);
+    if(storeModalChart) storeModalChart.destroy();
+    storeModalChart = new Chart(document.getElementById('storeModalChart'), {
+      type:'bar',
+      data:{ labels:PERIODS, datasets:[{ data:vals, backgroundColor:['#2B4C8C','#3A6B4C','#1B2C50','#6C749A','#101B33'], borderRadius:5 }] },
+      options:{ plugins:{legend:{display:false}}, scales:{ y:{ ticks:{ callback:v=>(v/1e6).toFixed(0)+'백만' } } } }
+    });
+  }
 }
 function closeModal(){ document.getElementById('overlay').classList.remove('open'); }
 document.getElementById('overlay').addEventListener('click', e=>{ if(e.target.id==='overlay') closeModal(); });
@@ -704,4 +816,5 @@ function renderAll(){
   if(state.view==='entry') renderEntry();
 }
 initNoticeDate();
+renderNav();
 renderAll();
