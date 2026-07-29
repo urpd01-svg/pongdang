@@ -10,23 +10,37 @@ const RAW_STORES = [
   ['퐁당','탕정점','충남','OK포스',0.022], ['퐁당','전주혁신점','전북','OK포스',0.033],
   ['유림대패','오창점','충북','OK포스',0],
   ['퐁당','공주점','충남','OK포스',0.033], ['퐁당','대구만촌','대구','OK포스',0.022], ['퐁당','세종시청','세종','OK포스',0.033],
-  ['퐁당','영등점','서울','OK포스',0.033], ['퐁당','내포신도시점','충남','OK포스',0.033], ['퐁당','전주도청점','전북','OK포스',0.033],
+  ['퐁당','영등점','전북','OK포스',0.033], ['퐁당','내포신도시점','충남','OK포스',0.033], ['퐁당','전주도청점','전북','OK포스',0.033],
   ['퐁당','관저점','대전','OK포스',0], ['퐁당','조치원점','세종','OK포스',0], ['퐁당','둔산점','대전','OK포스',0.033],
-  ['퐁당','정읍점','전북','OK포스',0.033], ['퐁당','오송점','충북','OK포스',0], ['퐁당','모현점','경기','OK포스',0],
-  ['퐁당','율량점','충북','업솔루션',0.022], ['퐁당','광주첨단점','광주','업솔루션',0.033], ['퐁당','유성점','대전','업솔루션',0],
-  ['퐁당','동남지구점','세종','업솔루션',0.033], ['퐁당','김포구래점','경기','업솔루션',0.033], ['퐁당','논산점','충남','업솔루션',0.022],
+  ['퐁당','정읍점','전북','OK포스',0.033], ['퐁당','오송점','충북','OK포스',0], ['퐁당','모현점','전북','OK포스',0],
+  ['퐁당','율량점','충북','업솔루션',0.022], ['퐁당','광주첨단점','전북','업솔루션',0.033], ['퐁당','유성점','대전','업솔루션',0],
+  ['퐁당','동남지구점','충북','업솔루션',0.033], ['퐁당','김포구래점','경기','업솔루션',0.033], ['퐁당','논산점','충남','업솔루션',0.022],
   ['퐁당','세종점','세종','업솔루션',0], ['퐁당','청주봉명점','충북','업솔루션',0.033], ['퐁당','전주송천점','전북','업솔루션',0.033],
   ['유림대패','비하점','충북','유니온포스',0],
   ['려원장어','세종점','세종','유플러스포스',0],
-  ['얼얼하이','성안점','충북','업솔루션',0], ['얼얼하이','아산용화점','충남','업솔루션',0],
+  ['얼얼하이','성안점','충북','업솔루션',0], ['얼얼하이','아산용화점','충남','업솔루션',0,300000],
 ];
 
-const STORES = RAW_STORES.map(([brand,name,region,pos,royalty],i)=>({
+const OPENED_DATES = {
+  '퐁당(모현점)':'2020-05-12', '퐁당(세종점)':'2020-05-28', '퐁당(관저점)':'2020-11-06',
+  '퐁당(오송점)':'2021-05-10', '퐁당(조치원점)':'2022-02-26', '퐁당(유성점)':'2022-10-24',
+  '퐁당(둔산점)':'2023-03-14', '퐁당(공주점)':'2023-06-16', '퐁당(탕정점)':'2023-07-20',
+  '퐁당(논산점)':'2023-08-10', '퐁당(전주도청점)':'2023-09-01', '퐁당(광주첨단점)':'2023-09-25',
+  '퐁당(전주혁신점)':'2023-10-16', '퐁당(정읍점)':'2023-11-10', '퐁당(영등점)':'2024-03-05',
+  '퐁당(대구만촌)':'2024-04-26', '퐁당(세종시청)':'2024-05-14', '퐁당(내포신도시점)':'2024-07-15',
+  '퐁당(율량점)':'2024-08-08', '퐁당(김포구래점)':'2025-05-24', '퐁당(동남지구점)':'2025-12-01',
+  '퐁당(청주봉명점)':'2026-03-05', '퐁당(전주송천점)':'2026-03-13',
+  '유림대패(오창점)':'2024-08-15', '유림대패(비하점)':'2024-01-09',
+  '려원장어(세종점)':'2024-12-01',
+  '얼얼하이(성안점)':'2025-12-08', '얼얼하이(아산용화점)':'2026-05-01',
+};
+
+const STORES = RAW_STORES.map(([brand,name,region,pos,royalty,royaltyFixed],i)=>({
   id:i, brand, name:`${brand}(${name})`, short:name, region, pos,
   area: 20 + Math.round(Math.random()*70),
   rent: 150 + Math.round(Math.random()*350),
-  royalty,
-  opened: `20${20+(i%6)}-0${1+(i%9)%9}-1${(i%9)+1}`,
+  royalty, royaltyFixed: royaltyFixed || null,
+  opened: OPENED_DATES[`${brand}(${name})`] || `20${20+(i%6)}-0${1+(i%9)%9}-1${(i%9)+1}`,
 }));
 
 const BRANDS = ['퐁당','유림대패','려원장어','얼얼하이'];
@@ -244,14 +258,14 @@ function renderNoticeBrandBlock(brand, dateStr, showSortLabel){
         <tr>
           <td>${i+1}</td><td class="txt">${r.s.region}</td><td class="txt">${r.s.short}</td><td class="txt">${r.s.opened}</td>
           <td>${won(r.prevDay)}</td><td>${won(r.cur.receipts)}</td><td>${won(r.cur.unit)}</td>
-          <td class="hl">${won(r.cur.sales)}</td><td class="hl">${won(r.proj)}</td><td>${won(r.cur.dayAvg??(r.cur.sales/(r.cur.days||1)))}</td>
+          <td class="hl-cur">${won(r.cur.sales)}</td><td class="hl-proj">${won(r.proj)}</td><td>${won(r.cur.dayAvg??(r.cur.sales/(r.cur.days||1)))}</td>
           <td>${won(r.prevMonth)}</td><td>${deltaSpan(r.momP)}</td>
           <td>${won(r.prevYear)}</td><td>${deltaSpan(r.yoyP)}</td>
         </tr>`).join('')}
         <tr class="total">
           <td colspan="4" class="txt">합계</td>
           <td>${won(sums.prevDay)}</td><td>${won(sums.receipts)}</td><td>${won(sumUnit)}</td>
-          <td class="hl">${won(sums.sales)}</td><td class="hl">${won(sums.proj)}</td><td>-</td>
+          <td class="hl-cur">${won(sums.sales)}</td><td class="hl-proj">${won(sums.proj)}</td><td>-</td>
           <td>${won(sums.prevMonth)}</td><td>${deltaSpan(sumMom)}</td>
           <td>${won(sums.prevYear)}</td><td>${deltaSpan(sumYoy)}</td>
         </tr>
@@ -268,12 +282,14 @@ function renderNoticeRoyaltyBlock(brand, dateStr){
   const body = rows.map((s,i)=>{
     const cur = metricsFor(s.name,'당월누적')?.sales||0;
     const proj = projectedClose(s.name);
-    const royCur = cur*s.royalty, royProj = proj*s.royalty;
+    const isFixed = !!s.royaltyFixed;
+    const royCur = isFixed ? s.royaltyFixed : cur*s.royalty;
+    const royProj = isFixed ? s.royaltyFixed : proj*s.royalty;
     sumCur+=cur; sumProj+=proj; sumRoyCur+=royCur; sumRoyProj+=royProj;
     return `<tr>
       <td>${i+1}</td><td class="txt">${s.region}</td><td class="txt">${s.short}</td><td class="txt">${s.opened}</td>
-      <td>${won(cur)}</td><td>${won(proj)}</td><td>${royPct(s.royalty)}</td>
-      <td class="hl">${won(royCur)}</td><td class="hl">${won(royProj)}</td>
+      <td>${won(cur)}</td><td>${won(proj)}</td><td>${isFixed ? '정액' : royPct(s.royalty)}</td>
+      <td class="hl-cur">${won(royCur)}</td><td class="hl-proj">${won(royProj)}</td>
     </tr>`;
   }).join('');
   return `
@@ -283,7 +299,7 @@ function renderNoticeRoyaltyBlock(brand, dateStr){
     <table class="notice">
       <thead><tr><th>개설순</th><th>지역</th><th>지점명</th><th>사업개시일</th><th>당월누적</th><th>예상마감</th><th>로열티율</th><th>당월누적기준</th><th>예상마감기준</th></tr></thead>
       <tbody>${body}
-        <tr class="total"><td colspan="4" class="txt">계</td><td>${won(sumCur)}</td><td>${won(sumProj)}</td><td>-</td><td class="hl">${won(sumRoyCur)}</td><td class="hl">${won(sumRoyProj)}</td></tr>
+        <tr class="total"><td colspan="4" class="txt">계</td><td>${won(sumCur)}</td><td>${won(sumProj)}</td><td>-</td><td class="hl-cur">${won(sumRoyCur)}</td><td class="hl-proj">${won(sumRoyProj)}</td></tr>
       </tbody>
     </table>
     </div>
@@ -295,7 +311,8 @@ function renderNotice(){
   let html = '';
   BRANDS.forEach((brand,i)=>{ html += renderNoticeBrandBlock(brand, dateStr, i===0); });
   html += `<div class="section-title"><span class="bar"></span>로열티현황</div>`;
-  BRANDS.forEach(brand=>{ html += renderNoticeRoyaltyBlock(brand, dateStr); });
+  const ROYALTY_BRANDS = BRANDS.filter(b=>b!=='유림대패' && b!=='려원장어');
+  ROYALTY_BRANDS.forEach(brand=>{ html += renderNoticeRoyaltyBlock(brand, dateStr); });
   document.getElementById('noticeContainer').innerHTML = html;
 }
 
@@ -413,7 +430,7 @@ function openStoreModal(id){
       <div class="k">개점일</div><div class="v">${s.opened}</div>
       <div class="k">전용면적</div><div class="v">${s.area}평</div>
       <div class="k">월 임대료</div><div class="v">${s.rent}만원</div>
-      <div class="k">로열티율</div><div class="v">${royPct(s.royalty)}</div>
+      <div class="k">로열티율</div><div class="v">${s.royaltyFixed ? `정액 ${won(s.royaltyFixed)}원` : royPct(s.royalty)}</div>
       <div class="k">당월누적 실매출액</div><div class="v num">${won(cur?.sales)}원</div>
       <div class="k">당월 예상마감</div><div class="v num">${won(proj)}원</div>
       <div class="k">예상 로열티(마감기준)</div><div class="v num">${won(proj*s.royalty)}원</div>
