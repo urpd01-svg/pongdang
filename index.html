@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
   :root{
     --navy:#101B33;        /* 진남색 - 사이드바/헤더 */
@@ -39,7 +40,8 @@
   .shell{ display:grid; grid-template-columns: 232px 1fr; min-height:100vh; }
   @media (max-width: 860px){ .shell{ grid-template-columns: 1fr; } .side{ display:none; } .side.open{ display:block; } }
 
-  .side{ background:var(--navy); color:#DDE3F0; padding:22px 16px; display:flex; flex-direction:column; gap:26px; }
+  .side{ background:var(--navy); color:#DDE3F0; padding:22px 16px; display:flex; flex-direction:column; gap:26px;
+    position:sticky; top:0; height:100vh; overflow-y:auto; }
   .brand{ display:flex; align-items:center; gap:10px; padding:0 4px; }
   .brand-mark{ width:34px; height:34px; border-radius:8px; background:linear-gradient(155deg, var(--blue), var(--navy-2));
     display:flex; align-items:center; justify-content:center; font-weight:800; color:#fff; font-size:15px; flex-shrink:0; }
@@ -232,7 +234,8 @@
           <span style="font-size:12.5px;color:var(--muted)">마감 기준일</span>
           <input type="date" id="noticeDate">
         </div>
-        <button class="btn dark small" onclick="window.print()">🖶 인쇄 / PDF로 저장</button>
+        <button class="btn dark small" id="copyImgBtn">📋 이미지로 복사 (카톡 붙여넣기용)</button>
+        <button class="btn ghost small" onclick="window.print()">🖶 인쇄 / PDF로 저장</button>
       </div>
       <div id="noticeContainer"></div>
     </section>

@@ -6,26 +6,26 @@
 
 /* ---------- 지점 정의 (지점명 → 실제 사용 포스) ---------- */
 const RAW_STORES = [
-  // brand, name, region, pos
-  ['퐁당','탕정점','충남','OK포스'], ['퐁당','전주혁신점','전북','OK포스'], ['퐁당','공주점','충남','OK포스'],
-  ['퐁당','대구만촌','대구','OK포스'], ['퐁당','세종시청','세종','OK포스'], ['퐁당','영등점','서울','OK포스'],
-  ['퐁당','내포신도시점','충남','OK포스'], ['퐁당','전주도청점','전북','OK포스'], ['퐁당','관저점','대전','OK포스'],
-  ['퐁당','조치원점','세종','OK포스'], ['퐁당','정읍점','전북','OK포스'], ['퐁당','둔산점','대전','OK포스'],
-  ['퐁당','오송점','충북','OK포스'], ['퐁당','모현점','경기','OK포스'], ['퐁당','청수법원점','대전','OK포스'],
-  ['퐁당','보령점','충남','OK포스'], ['퐁당','군산점','전북','OK포스'], ['퐁당','오창점','충북','OK포스'],
-  ['퐁당','율량점','충북','업솔루션'], ['퐁당','광주첨단점','광주','업솔루션'], ['퐁당','유성점','대전','업솔루션'],
-  ['퐁당','동남지구점','세종','업솔루션'], ['퐁당','김포구래점','경기','업솔루션'], ['퐁당','논산점','충남','업솔루션'],
-  ['퐁당','세종점','세종','업솔루션'], ['퐁당','청주봉명점','충북','업솔루션'], ['퐁당','전주송천점','전북','업솔루션'],
-  ['유림대패','오창점','충북','OK포스'], ['유림대패','비하점','충북','유니온포스'],
-  ['려원장어','세종점','세종','유플러스포스'],
-  ['얼얼하이','성안점','충북','업솔루션'], ['얼얼하이','아산용화점','충남','업솔루션'],
+  // brand, name, region, pos, 로열티율(실제 파일 기준, 미확정 0)
+  ['퐁당','탕정점','충남','OK포스',0.022], ['퐁당','전주혁신점','전북','OK포스',0.033],
+  ['유림대패','오창점','충북','OK포스',0],
+  ['퐁당','공주점','충남','OK포스',0.033], ['퐁당','대구만촌','대구','OK포스',0.022], ['퐁당','세종시청','세종','OK포스',0.033],
+  ['퐁당','영등점','서울','OK포스',0.033], ['퐁당','내포신도시점','충남','OK포스',0.033], ['퐁당','전주도청점','전북','OK포스',0.033],
+  ['퐁당','관저점','대전','OK포스',0], ['퐁당','조치원점','세종','OK포스',0], ['퐁당','둔산점','대전','OK포스',0.033],
+  ['퐁당','정읍점','전북','OK포스',0.033], ['퐁당','오송점','충북','OK포스',0], ['퐁당','모현점','경기','OK포스',0],
+  ['퐁당','율량점','충북','업솔루션',0.022], ['퐁당','광주첨단점','광주','업솔루션',0.033], ['퐁당','유성점','대전','업솔루션',0],
+  ['퐁당','동남지구점','세종','업솔루션',0.033], ['퐁당','김포구래점','경기','업솔루션',0.033], ['퐁당','논산점','충남','업솔루션',0.022],
+  ['퐁당','세종점','세종','업솔루션',0], ['퐁당','청주봉명점','충북','업솔루션',0.033], ['퐁당','전주송천점','전북','업솔루션',0.033],
+  ['유림대패','비하점','충북','유니온포스',0],
+  ['려원장어','세종점','세종','유플러스포스',0],
+  ['얼얼하이','성안점','충북','업솔루션',0], ['얼얼하이','아산용화점','충남','업솔루션',0],
 ];
 
-const STORES = RAW_STORES.map(([brand,name,region,pos],i)=>({
+const STORES = RAW_STORES.map(([brand,name,region,pos,royalty],i)=>({
   id:i, brand, name:`${brand}(${name})`, short:name, region, pos,
   area: 20 + Math.round(Math.random()*70),
   rent: 150 + Math.round(Math.random()*350),
-  royalty: [0.022,0.025,0.028,0.033][i%4],
+  royalty,
   opened: `20${20+(i%6)}-0${1+(i%9)%9}-1${(i%9)+1}`,
 }));
 
@@ -79,6 +79,7 @@ let SALES = loadSales();
 /* ---------- 계산 헬퍼 ---------- */
 const won = n => n==null || isNaN(n) ? '-' : Math.round(n).toLocaleString('ko-KR');
 const pct = n => n==null || isNaN(n) ? '-' : (n>=0?'+':'') + (n*100).toFixed(1) + '%';
+const royPct = r => !r ? '-' : (r*100).toFixed(1) + '%';
 
 function metricsFor(storeName, period){
   const store = STORES.find(s=>s.name===storeName);
@@ -271,7 +272,7 @@ function renderNoticeRoyaltyBlock(brand, dateStr){
     sumCur+=cur; sumProj+=proj; sumRoyCur+=royCur; sumRoyProj+=royProj;
     return `<tr>
       <td>${i+1}</td><td class="txt">${s.region}</td><td class="txt">${s.short}</td><td class="txt">${s.opened}</td>
-      <td>${won(cur)}</td><td>${won(proj)}</td><td>${(s.royalty*100).toFixed(1)}%</td>
+      <td>${won(cur)}</td><td>${won(proj)}</td><td>${royPct(s.royalty)}</td>
       <td class="hl">${won(royCur)}</td><td class="hl">${won(royProj)}</td>
     </tr>`;
   }).join('');
@@ -297,6 +298,34 @@ function renderNotice(){
   BRANDS.forEach(brand=>{ html += renderNoticeRoyaltyBlock(brand, dateStr); });
   document.getElementById('noticeContainer').innerHTML = html;
 }
+
+async function copyNoticeAsImage(){
+  const btn = document.getElementById('copyImgBtn');
+  const original = btn.textContent;
+  btn.textContent = '이미지 만드는 중…';
+  try{
+    const target = document.getElementById('noticeContainer');
+    const canvas = await html2canvas(target, { backgroundColor:'#F3F4F7', scale:2, useCORS:true });
+    canvas.toBlob(async (blob)=>{
+      try{
+        await navigator.clipboard.write([ new ClipboardItem({ 'image/png': blob }) ]);
+        showToast('이미지를 복사했어요 — 카카오톡 대화창에 Ctrl+V로 붙여넣으세요.');
+      }catch(err){
+        // 클립보드 API를 지원하지 않는 브라우저 → 다운로드로 대체
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `마감장표_${document.getElementById('noticeDate').value}.png`;
+        a.click(); URL.revokeObjectURL(url);
+        showToast('이 브라우저는 클립보드 복사가 안 되어 이미지로 다운로드했어요.');
+      }
+      btn.textContent = original;
+    }, 'image/png');
+  }catch(e){
+    showToast('이미지 생성에 실패했어요. 인터넷 연결을 확인해주세요.');
+    btn.textContent = original;
+  }
+}
+document.getElementById('copyImgBtn').addEventListener('click', copyNoticeAsImage);
 
 /* ---------- 매출성과분석표 ---------- */
 function renderAnalysis(){
@@ -384,7 +413,7 @@ function openStoreModal(id){
       <div class="k">개점일</div><div class="v">${s.opened}</div>
       <div class="k">전용면적</div><div class="v">${s.area}평</div>
       <div class="k">월 임대료</div><div class="v">${s.rent}만원</div>
-      <div class="k">로열티율</div><div class="v">${(s.royalty*100).toFixed(1)}%</div>
+      <div class="k">로열티율</div><div class="v">${royPct(s.royalty)}</div>
       <div class="k">당월누적 실매출액</div><div class="v num">${won(cur?.sales)}원</div>
       <div class="k">당월 예상마감</div><div class="v num">${won(proj)}원</div>
       <div class="k">예상 로열티(마감기준)</div><div class="v num">${won(proj*s.royalty)}원</div>
