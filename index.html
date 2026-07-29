@@ -143,11 +143,12 @@
   .pos-tabs button.active{ background:var(--navy); color:#fff; }
   .paste-hint{ font-size:11.5px; color:var(--muted); background:var(--blue-soft); padding:8px 12px; border-radius:8px; margin-bottom:12px; }
   .paste-hint b{ color:var(--blue); }
-  .grid-table{ width:100%; border-collapse:collapse; font-size:12.5px; }
-  .grid-table th{ background:#EEF0F4; color:var(--navy-2); font-weight:700; font-size:11px; padding:7px 6px; border:1px solid var(--line); white-space:nowrap; position:sticky; top:0; }
-  .grid-table td{ border:1px solid var(--line); padding:0; }
+  .grid-table{ width:auto; min-width:100%; border-collapse:collapse; font-size:12.5px; table-layout:auto; }
+  .grid-table th{ background:#EEF0F4; color:var(--navy-2); font-weight:700; font-size:11px; padding:7px 10px; border:1px solid var(--line); white-space:nowrap; position:sticky; top:0; }
+  .grid-table td{ border:1px solid var(--line); padding:0; white-space:nowrap; }
   .grid-table td.fixed{ background:#F7F8FA; font-weight:600; padding:6px 8px; white-space:nowrap; }
-  .grid-table input{ width:100%; height:100%; border:none; padding:6px 8px; text-align:right; font-family:'JetBrains Mono'; font-size:12px; border-radius:0; background:transparent; }
+  .grid-table input{ width:100%; min-width:88px; height:100%; box-sizing:border-box; border:none; padding:6px 10px; text-align:right; font-family:'JetBrains Mono'; font-size:12px; border-radius:0; background:transparent; }
+  .grid-table input[data-field="매장명"], .grid-table input[data-field="매장코드"], .grid-table input[data-field="매출일자"]{ min-width:120px; text-align:left; }
   .grid-table input:focus{ outline:2px solid var(--blue); outline-offset:-2px; background:#fff; position:relative; z-index:1; }
   .grid-scroll{ max-height:58vh; overflow:auto; border:1px solid var(--line); border-radius:10px; }
   .save-bar{ position:sticky; bottom:0; background:linear-gradient(to top, var(--paper) 65%, transparent); padding:14px 0 4px; margin-top:8px; display:flex; justify-content:flex-end; gap:8px; }
@@ -164,7 +165,7 @@
   .notice-head .date-chip{ background:rgba(255,255,255,.12); padding:4px 10px; border-radius:6px; font-weight:600; }
   .notice-head .brand-chip{ background:var(--blue); padding:4px 12px; border-radius:6px; font-weight:700; font-size:13px; }
   .notice-head .hint{ font-size:11px; color:#B9C0DA; }
-  table.notice{ width:100%; border-collapse:collapse; font-size:13px; background:#fff; }
+  table.notice{ width:100%; border-collapse:collapse; font-size:13px; background:#fff; table-layout:fixed; }
   table.notice th{ background:#EEF0F4; color:var(--navy-2); padding:8px 7px; font-size:11.5px; font-weight:700; text-align:center; border:1px solid var(--line); white-space:nowrap; }
   table.notice td{ padding:7px 7px; text-align:right; border:1px solid #EEF0F4; white-space:nowrap; font-size:13px; }
   table.notice td.txt{ text-align:left; }
@@ -235,11 +236,18 @@
         <div class="toolbar" style="margin:0;">
           <span style="font-size:12.5px;color:var(--muted)">마감 기준일</span>
           <input type="date" id="noticeDate">
+          <div class="seg" id="noticeSubTab" style="margin-left:8px;">
+            <button data-sub="sales" class="active">매출현황</button>
+            <button data-sub="royalty">로열티현황</button>
+          </div>
         </div>
-        <button class="btn dark small" id="copyImgBtn">📋 이미지로 복사 (카톡 붙여넣기용)</button>
-        <button class="btn ghost small" onclick="window.print()">🖶 인쇄 / PDF로 저장</button>
+        <div>
+          <button class="btn dark small" id="copyImgBtn">📋 이미지로 복사 (카톡 붙여넣기용)</button>
+          <button class="btn ghost small" onclick="window.print()">🖶 인쇄 / PDF로 저장</button>
+        </div>
       </div>
-      <div id="noticeContainer"></div>
+      <div id="noticeSalesContainer"></div>
+      <div id="noticeRoyaltyContainer" style="display:none;"></div>
     </section>
 
     <section class="view" id="view-analysis">
@@ -289,6 +297,6 @@
 
 <div class="overlay" id="overlay"><div class="modal" id="modalBody"></div></div>
 <div class="toast" id="toast"></div>
-<script src="app.js?v=20260729d"></script>
+<script src="app.js?v=20260729i"></script>
 </body>
 </html>

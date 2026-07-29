@@ -82,6 +82,25 @@ const POS_SCHEMA = {
 };
 const POS_LIST = Object.keys(POS_SCHEMA);
 
+// 같은 포스(시스템)라도 브랜드별로 계정이 분리되어 있으면 여기서 나눠주세요.
+// key = 화면에 보일 탭 이름, schema = 어떤 POS_SCHEMA(컬럼 구성)를 쓸지, brands = 해당 계정에 속한 브랜드(null이면 그 포스 전체)
+const ACCOUNTS = {
+  'OK포스':          { schema:'OK포스',    brands:null },
+  '업솔루션(퐁당)':   { schema:'업솔루션',  brands:['퐁당'] },
+  '업솔루션(얼얼하이)':{ schema:'업솔루션',  brands:['얼얼하이'] },
+  '유니온포스':      { schema:'유니온포스', brands:null },
+  '유플러스포스':    { schema:'유플러스포스', brands:null },
+};
+const ACCOUNT_LIST = Object.keys(ACCOUNTS);
+function accountOf(store){
+  if(store.pos !== '업솔루션') return store.pos;
+  return `업솔루션(${store.brand})`;
+}
+function storesForAccount(account){
+  const cfg = ACCOUNTS[account];
+  return STORES.filter(s=>accountOf(s)===account);
+}
+
 /* ---------- 예시 매출 데이터 생성 ---------- */
 function seedSales(){
   const base = {};
@@ -280,6 +299,12 @@ function renderNoticeBrandBlock(brand, dateStr, showSortLabel){
     </div>
     <div style="overflow-x:auto">
     <table class="notice">
+      <colgroup>
+        <col style="width:4%"><col style="width:6%"><col style="width:9%"><col style="width:8%">
+        <col style="width:8%"><col style="width:7%"><col style="width:7%">
+        <col style="width:8%"><col style="width:8%"><col style="width:7%">
+        <col style="width:8%"><col style="width:6%"><col style="width:8%"><col style="width:6%">
+      </colgroup>
       <thead>
         <tr>
           <th rowspan="2">순위</th><th rowspan="2">지역</th><th rowspan="2">지점명</th><th rowspan="2">사업개시일</th>
@@ -335,6 +360,11 @@ function renderNoticeRoyaltyBlock(brand, dateStr){
     <div class="notice-head"><div class="lft"><span class="date-chip">${dateStr} 마감 기준</span><span class="brand-chip">${brand} · 로열티현황 (개설순)</span></div></div>
     <div style="overflow-x:auto">
     <table class="notice">
+      <colgroup>
+        <col style="width:6%"><col style="width:8%"><col style="width:14%"><col style="width:12%">
+        <col style="width:13%"><col style="width:13%"><col style="width:9%">
+        <col style="width:13%"><col style="width:12%">
+      </colgroup>
       <thead><tr><th>개설순</th><th>지역</th><th>지점명</th><th>사업개시일</th><th>당월누적</th><th>예상마감</th><th>로열티율</th><th>당월누적기준</th><th>예상마감기준</th></tr></thead>
       <tbody>${body}
         <tr class="total"><td colspan="4" class="txt">계</td><td>${won(sumCur)}</td><td>${won(sumProj)}</td><td>-</td><td class="hl-cur">${won(sumRoyCur)}</td><td class="hl-proj">${won(sumRoyProj)}</td></tr>
@@ -346,12 +376,30 @@ function renderNoticeRoyaltyBlock(brand, dateStr){
 
 function renderNotice(){
   const dateStr = fmtDate(document.getElementById('noticeDate').value || new Date());
-  let html = '';
-  BRANDS.forEach((brand,i)=>{ html += renderNoticeBrandBlock(brand, dateStr, i===0); });
-  html += `<div class="section-title"><span class="bar"></span>로열티현황</div>`;
+  let salesHtml = '';
+  BRANDS.forEach((brand,i)=>{ salesHtml += renderNoticeBrandBlock(brand, dateStr, i===0); });
+  document.getElementById('noticeSalesContainer').innerHTML = salesHtml;
+
+  let royaltyHtml = '';
   const ROYALTY_BRANDS = BRANDS.filter(b=>b!=='유림대패' && b!=='려원장어');
-  ROYALTY_BRANDS.forEach(brand=>{ html += renderNoticeRoyaltyBlock(brand, dateStr); });
-  document.getElementById('noticeContainer').innerHTML = html;
+  ROYALTY_BRANDS.forEach(brand=>{ royaltyHtml += renderNoticeRoyaltyBlock(brand, dateStr); });
+  document.getElementById('noticeRoyaltyContainer').innerHTML = royaltyHtml;
+}
+
+document.querySelectorAll('#noticeSubTab button').forEach(b=>b.addEventListener('click', ()=>{
+  document.querySelectorAll('#noticeSubTab button').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  const sub = b.dataset.sub;
+  document.getElementById('noticeSalesContainer').style.display = sub==='sales' ? '' : 'none';
+  document.getElementById('noticeRoyaltyContainer').style.display = sub==='royalty' ? '' : 'none';
+}));
+
+function activeNoticeContainerId(){
+  const active = document.querySelector('#noticeSubTab button.active')?.dataset.sub;
+  return active==='royalty' ? 'noticeRoyaltyContainer' : 'noticeSalesContainer';
+}
+function activeNoticeLabel(){
+  return activeNoticeContainerId()==='noticeRoyaltyContainer' ? '로열티현황' : '매출현황';
 }
 
 async function copyNoticeAsImage(){
@@ -359,17 +407,17 @@ async function copyNoticeAsImage(){
   const original = btn.textContent;
   btn.textContent = '이미지 만드는 중…';
   try{
-    const target = document.getElementById('noticeContainer');
+    const target = document.getElementById(activeNoticeContainerId());
     const canvas = await html2canvas(target, { backgroundColor:'#F3F4F7', scale:2, useCORS:true });
     canvas.toBlob(async (blob)=>{
       try{
         await navigator.clipboard.write([ new ClipboardItem({ 'image/png': blob }) ]);
-        showToast('이미지를 복사했어요 — 카카오톡 대화창에 Ctrl+V로 붙여넣으세요.');
+        showToast(`${activeNoticeLabel()} 이미지를 복사했어요 — 카카오톡 대화창에 Ctrl+V로 붙여넣으세요.`);
       }catch(err){
         // 클립보드 API를 지원하지 않는 브라우저 → 다운로드로 대체
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url; a.download = `마감장표_${document.getElementById('noticeDate').value}.png`;
+        a.href = url; a.download = `${activeNoticeLabel()}_${document.getElementById('noticeDate').value}.png`;
         a.click(); URL.revokeObjectURL(url);
         showToast('이 브라우저는 클립보드 복사가 안 되어 이미지로 다운로드했어요.');
       }
@@ -484,8 +532,8 @@ document.getElementById('overlay').addEventListener('click', e=>{ if(e.target.id
 
 /* ---------- 매출 데이터 입력 (포스별 붙여넣기) ---------- */
 function renderPosTabs(){
-  document.getElementById('posTabs').innerHTML = POS_LIST.map(p=>
-    `<button data-pos="${p}" class="${p===state.entryPos?'active':''}">${p} <span style="opacity:.6">(${STORES.filter(s=>s.pos===p).length})</span></button>`
+  document.getElementById('posTabs').innerHTML = ACCOUNT_LIST.map(p=>
+    `<button data-pos="${p}" class="${p===state.entryPos?'active':''}">${p} <span style="opacity:.6">(${storesForAccount(p).length})</span></button>`
   ).join('');
   document.querySelectorAll('#posTabs button').forEach(b=>b.addEventListener('click', ()=>{
     state.entryPos = b.dataset.pos; renderEntry();
@@ -498,9 +546,10 @@ document.querySelectorAll('#entryPeriod button').forEach(b=>b.addEventListener('
 
 function renderEntry(){
   renderPosTabs();
-  const period = state.entryPeriod, pos = state.entryPos;
-  const schema = POS_SCHEMA[pos];
-  const rows = STORES.filter(s=>s.pos===pos);
+  const period = state.entryPeriod, account = state.entryPos;
+  const schemaKey = ACCOUNTS[account].schema;
+  const schema = POS_SCHEMA[schemaKey];
+  const rows = storesForAccount(account);
   const grid = document.getElementById('entryGrid');
   grid.innerHTML = `
     <thead><tr>${schema.fields.map(f=>`<th>${f}</th>`).join('')}</tr></thead>
@@ -515,10 +564,29 @@ function renderEntry(){
       </tr>`;
     }).join('')}</tbody>`;
   attachPasteHandler(grid);
+  attachNameValidation(grid, schema, account);
+}
+
+function attachNameValidation(grid, schema, account){
+  const nameInputs = Array.from(grid.querySelectorAll(`input[data-field="${schema.storeField}"]`));
+  const check = (inp)=>{
+    const ok = !!matchStore(inp.value.trim(), account);
+    inp.style.background = ok ? '' : '#FDE7E5';
+    inp.style.outline = ok ? '' : '2px solid var(--up)';
+    inp.title = ok ? '' : '등록된 지점명과 일치하지 않아요. 저장해도 이 줄은 반영되지 않아요.';
+  };
+  nameInputs.forEach(inp=>{
+    check(inp);
+    inp.addEventListener('input', ()=>check(inp));
+    inp.addEventListener('paste', ()=>setTimeout(()=>{
+      // paste 이벤트로 여러 줄이 채워질 수 있으니 전체 매장명 칸을 다시 검사
+      nameInputs.forEach(check);
+    }, 0));
+  });
 }
 
 function attachPasteHandler(grid){
-  const schema = POS_SCHEMA[state.entryPos];
+  const schema = POS_SCHEMA[ACCOUNTS[state.entryPos].schema];
   const inputs = Array.from(grid.querySelectorAll('input'));
   const cols = schema.fields.length;
   inputs.forEach((inp, idx)=>{
@@ -549,22 +617,52 @@ function attachPasteHandler(grid){
   });
 }
 
-function matchStore(pastedName, pos){
-  const candidates = STORES.filter(s=>s.pos===pos);
-  let hit = candidates.find(s=>s.name === pastedName);
-  if(!hit) hit = candidates.find(s=>pastedName.includes(s.short) || s.name.includes(pastedName));
+// 포스 화면에 찍히는 이름이 우리 지점명과 다른 경우 여기에 등록하세요.
+// 왼쪽(포스에서 붙여넣는 실제 텍스트) -> 오른쪽(우리 시스템의 정식 지점명)
+const STORE_ALIASES = {
+  '얼얼하이 청주성안점': '얼얼하이(성안점)',
+  '얼얼하이 청주 성안점': '얼얼하이(성안점)',
+  '얼얼하이 아산점': '얼얼하이(아산용화점)',
+  '얼얼하이 아산 점': '얼얼하이(아산용화점)',
+};
+
+function normalizeName(s){ return (s||'').replace(/\s+/g,'').replace(/[()]/g,''); }
+
+function matchStore(pastedName, account){
+  const candidates = storesForAccount(account);
+  const trimmed = pastedName.trim();
+
+  // 1) 별칭표 먼저 확인 (공백 유무 상관없이)
+  const aliasKey = Object.keys(STORE_ALIASES).find(k => normalizeName(k) === normalizeName(trimmed));
+  if(aliasKey){
+    const canonical = STORE_ALIASES[aliasKey];
+    const hit = candidates.find(s=>s.name===canonical);
+    if(hit) return hit;
+  }
+
+  // 2) 정확히 일치
+  let hit = candidates.find(s=>s.name === trimmed);
+  if(hit) return hit;
+
+  // 3) 공백/괄호 제거 후 서로 포함 관계 확인
+  const norm = normalizeName(trimmed);
+  hit = candidates.find(s=>{
+    const shortNorm = normalizeName(s.short);
+    const nameNorm = normalizeName(s.name);
+    return norm.includes(shortNorm) || nameNorm.includes(norm) || norm.includes(nameNorm.replace(s.brand,''));
+  });
   return hit;
 }
 
 document.getElementById('saveBtn').addEventListener('click', ()=>{
-  const period = state.entryPeriod, pos = state.entryPos;
-  const schema = POS_SCHEMA[pos];
+  const period = state.entryPeriod, account = state.entryPos;
+  const schema = POS_SCHEMA[ACCOUNTS[account].schema];
   let unmatched = [];
   document.querySelectorAll('#entryGrid tbody tr').forEach(row=>{
     const inputs = row.querySelectorAll('input');
     const nameInput = Array.from(inputs).find(i=>i.dataset.field===schema.storeField);
     const pastedName = nameInput.value.trim();
-    const store = matchStore(pastedName, pos);
+    const store = matchStore(pastedName, account);
     if(!store){ unmatched.push(pastedName || '(빈 칸)'); return; }
     const rec = SALES[period][store.name] || {};
     inputs.forEach(inp=>{ rec[inp.dataset.field] = TEXT_FIELDS.has(inp.dataset.field) ? inp.value : (+inp.value || 0); });
@@ -572,7 +670,7 @@ document.getElementById('saveBtn').addEventListener('click', ()=>{
   });
   saveSales(SALES);
   if(unmatched.length){
-    showToast(`저장했어요. 다만 지점명을 못 찾은 줄이 있어요: ${unmatched.slice(0,3).join(', ')}`);
+    showToast(`⚠ 지점명을 못 찾아 저장 안 된 줄이 있어요: ${unmatched.slice(0,3).join(', ')}`);
   }else{
     showToast('저장했어요 — 매출장표 · 공지용 마감장표에 반영됐어요.');
   }
