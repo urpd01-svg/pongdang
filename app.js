@@ -207,27 +207,35 @@ const TITLES = {
   archive:['마감장표 업로드','월별 마감 완료된 엑셀 장표 보관'],
 };
 const NAV_ICON = { report:'▤', notice:'▥', analysis:'◈', stores:'▦', entry:'✎', admin:'⚙', archive:'⇪' };
-const DEFAULT_NAV_ORDER = ['report','notice','analysis','stores','entry','admin','archive'];
+const NAV_CATEGORIES_DEFAULT = [
+  { label:'통합현황', views:['report','notice','analysis','stores'] },
+  { label:'운영', views:['entry','admin','archive'] },
+];
+const ALL_NAV_VIEWS = NAV_CATEGORIES_DEFAULT.flatMap(c=>c.views);
 
-function loadNavOrder(){
-  const raw = localStorage.getItem('yfp_nav_order');
+function loadNavCategories(){
+  const raw = localStorage.getItem('yfp_nav_categories');
   if(raw){
     try{
-      const arr = JSON.parse(raw);
-      if(Array.isArray(arr) && DEFAULT_NAV_ORDER.every(v=>arr.includes(v)) && arr.length===DEFAULT_NAV_ORDER.length) return arr;
+      const cats = JSON.parse(raw);
+      const flat = cats.flatMap(c=>c.views);
+      if(Array.isArray(cats) && ALL_NAV_VIEWS.every(v=>flat.includes(v)) && flat.length===ALL_NAV_VIEWS.length) return cats;
     }catch(e){}
   }
-  return DEFAULT_NAV_ORDER.slice();
+  return NAV_CATEGORIES_DEFAULT.map(c=>({label:c.label, views:c.views.slice()}));
 }
-function saveNavOrder(order){ localStorage.setItem('yfp_nav_order', JSON.stringify(order)); }
+function saveNavCategories(cats){ localStorage.setItem('yfp_nav_categories', JSON.stringify(cats)); }
 
 function renderNav(){
-  const order = loadNavOrder();
+  const cats = loadNavCategories();
   const nav = document.getElementById('nav');
-  nav.innerHTML = order.map(v=>`
-    <button data-view="${v}" draggable="true" class="${v===state.view?'active':''}">
-      <span class="handle">⠿</span><ico>${NAV_ICON[v]}</ico> ${TITLES[v][0]}
-    </button>`).join('');
+  nav.innerHTML = cats.map(cat=>`
+    <div class="nav-label" data-cat="${cat.label}">${cat.label}</div>
+    ${cat.views.map(v=>`
+      <button data-view="${v}" draggable="true" class="${v===state.view?'active':''}">
+        <span class="handle">⠿</span><ico>${NAV_ICON[v]}</ico> ${TITLES[v][0]}
+      </button>`).join('')}
+  `).join('');
   bindNavClicks();
   bindNavDrag();
 }
@@ -249,6 +257,21 @@ function bindNavClicks(){
   });
 }
 
+function persistNavFromDom(){
+  const nav = document.getElementById('nav');
+  const cats = [];
+  let cur = null;
+  Array.from(nav.children).forEach(el=>{
+    if(el.classList.contains('nav-label')){
+      cur = { label: el.dataset.cat, views: [] };
+      cats.push(cur);
+    }else if(el.tagName==='BUTTON' && cur){
+      cur.views.push(el.dataset.view);
+    }
+  });
+  saveNavCategories(cats);
+}
+
 function bindNavDrag(){
   const nav = document.getElementById('nav');
   let dragEl = null;
@@ -259,18 +282,27 @@ function bindNavDrag(){
     });
     btn.addEventListener('dragend', ()=>{
       btn.classList.remove('dragging');
-      nav.querySelectorAll('button').forEach(b=>b.classList.remove('drag-over'));
-      const newOrder = Array.from(nav.querySelectorAll('button')).map(b=>b.dataset.view);
-      saveNavOrder(newOrder);
+      nav.querySelectorAll('button, .nav-label').forEach(b=>b.classList.remove('drag-over'));
+      persistNavFromDom();
     });
     btn.addEventListener('dragover', (e)=>{
       e.preventDefault();
       if(btn===dragEl) return;
       const rect = btn.getBoundingClientRect();
       const before = (e.clientY - rect.top) < rect.height/2;
-      nav.querySelectorAll('button').forEach(b=>b.classList.remove('drag-over'));
+      nav.querySelectorAll('button, .nav-label').forEach(b=>b.classList.remove('drag-over'));
       btn.classList.add('drag-over');
       btn.parentNode.insertBefore(dragEl, before ? btn : btn.nextSibling);
+    });
+  });
+  // 카테고리 라벨 위로 드롭하면 그 카테고리 맨 앞으로 이동
+  nav.querySelectorAll('.nav-label').forEach(label=>{
+    label.addEventListener('dragover', (e)=>{
+      e.preventDefault();
+      if(!dragEl) return;
+      nav.querySelectorAll('button, .nav-label').forEach(b=>b.classList.remove('drag-over'));
+      label.classList.add('drag-over');
+      label.parentNode.insertBefore(dragEl, label.nextSibling);
     });
   });
 }
@@ -481,27 +513,31 @@ function renderNotice(){
   const monthSel = document.getElementById('noticeMonthSelect');
   const isArchive = monthSel && monthSel.value !== 'current';
 
-  document.getElementById('noticeSubTab').style.display = isArchive ? 'none' : '';
   document.getElementById('noticeDate').closest('.toolbar').querySelector('span').style.display = isArchive ? 'none' : '';
   document.getElementById('noticeDate').style.display = isArchive ? 'none' : '';
-
-  if(isArchive){
-    const a = ARCHIVES[monthSel.value];
-    document.getElementById('noticeSalesContainer').style.display = 'none';
-    document.getElementById('noticeRoyaltyContainer').style.display = 'none';
-    const archiveEl = document.getElementById('noticeArchiveContainer');
-    archiveEl.style.display = '';
-    archiveEl.innerHTML = a ? `
-      <div class="notice-block">
-        <div class="notice-head"><div class="lft"><span class="date-chip">${monthSel.value} 업로드본</span><span class="brand-chip">${a.fileName} · "${a.sheetName}" 시트</span></div></div>
-        <div class="archive-sheet">${a.html}</div>
-      </div>` : `<div class="card">해당 월의 업로드된 마감장표를 찾을 수 없어요.</div>`;
-    return;
-  }
   document.getElementById('noticeArchiveContainer').style.display = 'none';
+
   const activeSub = document.querySelector('#noticeSubTab button.active')?.dataset.sub || 'sales';
   document.getElementById('noticeSalesContainer').style.display = activeSub==='sales' ? '' : 'none';
   document.getElementById('noticeRoyaltyContainer').style.display = activeSub==='royalty' ? '' : 'none';
+
+  if(isArchive){
+    const a = ARCHIVES[monthSel.value];
+    if(!a){
+      document.getElementById('noticeSalesContainer').innerHTML = `<div class="card">해당 월의 업로드된 마감장표를 찾을 수 없어요.</div>`;
+      document.getElementById('noticeRoyaltyContainer').innerHTML = '';
+      return;
+    }
+    const dateStr = monthSel.value + ' 업로드본';
+    let salesHtml = '';
+    Object.entries(a.parsed.brands).forEach(([brand, rows], i)=>{ salesHtml += renderArchiveBrandBlock(brand, dateStr, rows, i===0); });
+    document.getElementById('noticeSalesContainer').innerHTML = salesHtml || `<div class="card">매출현황 데이터를 인식하지 못했어요.</div>`;
+
+    let royaltyHtml = '';
+    Object.entries(a.parsed.royalty).forEach(([brand, rows])=>{ royaltyHtml += renderArchiveRoyaltyBlock(brand, dateStr, rows); });
+    document.getElementById('noticeRoyaltyContainer').innerHTML = royaltyHtml || `<div class="card">로열티현황 데이터가 없어요.</div>`;
+    return;
+  }
 
   const dateStr = fmtDate(document.getElementById('noticeDate').value || new Date());
   let salesHtml = '';
@@ -523,15 +559,193 @@ document.querySelectorAll('#noticeSubTab button').forEach(b=>b.addEventListener(
 }));
 
 function activeNoticeContainerId(){
-  const monthSel = document.getElementById('noticeMonthSelect');
-  if(monthSel && monthSel.value !== 'current') return 'noticeArchiveContainer';
   const active = document.querySelector('#noticeSubTab button.active')?.dataset.sub;
   return active==='royalty' ? 'noticeRoyaltyContainer' : 'noticeSalesContainer';
 }
 function activeNoticeLabel(){
-  const id = activeNoticeContainerId();
-  if(id==='noticeArchiveContainer') return `${document.getElementById('noticeMonthSelect').value}_업로드본`;
-  return id==='noticeRoyaltyContainer' ? '로열티현황' : '매출현황';
+  const monthSel = document.getElementById('noticeMonthSelect');
+  const suffix = (monthSel && monthSel.value!=='current') ? `_${monthSel.value}` : '';
+  return (activeNoticeContainerId()==='noticeRoyaltyContainer' ? '로열티현황' : '매출현황') + suffix;
+}
+
+/* ---------- 업로드된 엑셀을 "공지용 마감장표"와 같은 양식으로 렌더링 ---------- */
+function renderArchiveBrandBlock(brand, dateStr, rows, showSortLabel){
+  if(!rows.length) return '';
+  const sums = rows.reduce((a,r)=>({
+    prevDay:a.prevDay+(r.prevDay||0), receipts:a.receipts+(r.receipts||0), sales:a.sales+(r.curSales||0),
+    proj:a.proj+(r.proj||0), prevMonth:a.prevMonth+(r.prevMonth||0), prevYear:a.prevYear+(r.prevYear||0)
+  }), {prevDay:0,receipts:0,sales:0,proj:0,prevMonth:0,prevYear:0});
+  const sumUnit = sums.receipts ? sums.sales/sums.receipts : 0;
+  const sumMom = sums.prevMonth ? (sums.proj-sums.prevMonth)/sums.prevMonth : null;
+  const sumYoy = sums.prevYear ? (sums.proj-sums.prevYear)/sums.prevYear : null;
+  return `
+  <div class="notice-block">
+    <div class="notice-head">
+      <div class="lft"><span class="date-chip">${dateStr} 마감 기준</span><span class="brand-chip">${brand}</span></div>
+      ${showSortLabel ? '<div class="hint">매출 내림차순 정렬</div>' : ''}
+    </div>
+    <table class="notice">
+      <colgroup>
+        <col style="width:4%"><col style="width:6%"><col style="width:9%"><col style="width:8%">
+        <col style="width:8%"><col style="width:7%"><col style="width:7%">
+        <col style="width:8%"><col style="width:8%"><col style="width:7%">
+        <col style="width:8%"><col style="width:6%"><col style="width:8%"><col style="width:6%">
+      </colgroup>
+      <thead>
+        <tr>
+          <th rowspan="2">순위</th><th rowspan="2">지역</th><th rowspan="2">지점명</th><th rowspan="2">사업개시일</th>
+          <th colspan="6">당월 매출 현황</th>
+          <th colspan="2">전월 대비</th><th colspan="2">전년동월 대비</th>
+        </tr>
+        <tr>
+          <th>전일매출</th><th>영수건수</th><th>영수단가</th><th>당월누적매출</th><th>당월예상마감</th><th>일평균매출</th>
+          <th>전월매출</th><th>증감률</th><th>전년동월매출</th><th>증감률</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map((r,i)=>`
+        <tr>
+          <td>${i+1}</td><td class="txt">${r.region||'-'}</td><td class="txt${r.type==='직영점'?' td-direct':''}">${r.name}</td><td class="txt${r.type==='직영점'?' td-direct':''}">${r.opened||'-'}</td>
+          <td>${won(r.prevDay)}</td><td>${won(r.receipts)}</td><td>${won(r.unit)}</td>
+          <td class="hl-cur">${won(r.curSales)}</td><td class="hl-proj">${won(r.proj)}</td><td>${won(r.dayAvg)}</td>
+          <td>${won(r.prevMonth)}</td><td>${deltaSpan(r.momP)}</td>
+          <td>${won(r.prevYear)}</td><td>${deltaSpan(r.yoyP)}</td>
+        </tr>`).join('')}
+        <tr class="total">
+          <td colspan="4" class="txt">합계</td>
+          <td>${won(sums.prevDay)}</td><td>${won(sums.receipts)}</td><td>${won(sumUnit)}</td>
+          <td class="hl-cur">${won(sums.sales)}</td><td class="hl-proj">${won(sums.proj)}</td><td>-</td>
+          <td>${won(sums.prevMonth)}</td><td>${deltaSpan(sumMom)}</td>
+          <td>${won(sums.prevYear)}</td><td>${deltaSpan(sumYoy)}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function renderArchiveRoyaltyBlock(brand, dateStr, rows){
+  if(!rows.length) return '';
+  let sumCur=0,sumProj=0,sumRoyCur=0,sumRoyProj=0;
+  const body = rows.map((r,i)=>{
+    sumCur+=r.cur||0; sumProj+=r.proj||0; sumRoyCur+=r.royCur||0; sumRoyProj+=r.royProj||0;
+    return `<tr>
+      <td>${i+1}</td><td class="txt">${r.region||'-'}</td><td class="txt${r.type==='직영점'?' td-direct':''}">${r.name}</td><td class="txt${r.type==='직영점'?' td-direct':''}">${r.opened||'-'}</td>
+      <td>${won(r.cur)}</td><td>${won(r.proj)}</td><td>${r.royaltyDisplay||'-'}</td>
+      <td class="hl-cur">${won(r.royCur)}</td><td class="hl-proj">${won(r.royProj)}</td>
+    </tr>`;
+  }).join('');
+  return `
+  <div class="notice-block">
+    <div class="notice-head"><div class="lft"><span class="date-chip">${dateStr} 마감 기준</span><span class="brand-chip">${brand} · 로열티현황</span></div></div>
+    <table class="notice">
+      <colgroup>
+        <col style="width:6%"><col style="width:8%"><col style="width:14%"><col style="width:12%">
+        <col style="width:13%"><col style="width:13%"><col style="width:9%">
+        <col style="width:13%"><col style="width:12%">
+      </colgroup>
+      <thead><tr><th>순위</th><th>지역</th><th>지점명</th><th>사업개시일</th><th>당월누적</th><th>예상마감</th><th>로열티율</th><th>당월누적기준</th><th>예상마감기준</th></tr></thead>
+      <tbody>${body}
+        <tr class="total"><td colspan="4" class="txt">계</td><td>${won(sumCur)}</td><td>${won(sumProj)}</td><td>-</td><td class="hl-cur">${won(sumRoyCur)}</td><td class="hl-proj">${won(sumRoyProj)}</td></tr>
+      </tbody>
+    </table>
+  </div>`;
+}
+
+// 헤더 텍스트로 컬럼을 찾기 위한 별칭표
+const COL_ALIASES = {
+  region:['지역'], name:['지점명','매장명'], opened:['사업개시일','개시일'],
+  prevDay:['전일매출'], receipts:['영수건수','누적영수건수'], unit:['영수단가'],
+  curSales:['당월누적매출','당월누적'], proj:['당월예상마감','예상마감'], dayAvg:['일평균매출','일평균'],
+  prevMonth:['전월매출'], prevYear:['전년동월매출'],
+  royaltyPct:['로열티율'], royCur:['당월누적기준'], royProj:['예상마감기준'],
+};
+function cellText(v){ return v==null ? '' : String(v).trim(); }
+function toNum(v){
+  if(v==null || v==='' || v==='-') return null;
+  if(typeof v==='number') return v;
+  const n = parseFloat(String(v).replace(/[^0-9.\-]/g,''));
+  return isNaN(n) ? null : n;
+}
+function matchHeaderRow(row){
+  const map = {};
+  let momSeen = false;
+  row.forEach((cellRaw, c)=>{
+    const cell = cellText(cellRaw);
+    if(!cell) return;
+    for(const [field, aliases] of Object.entries(COL_ALIASES)){
+      if(map[field]!=null) continue;
+      if(aliases.some(a=>cell.includes(a))) map[field] = c;
+    }
+    if(cell.includes('증감률')){
+      if(!momSeen){ map.momPct = c; momSeen = true; } else { map.yoyPct = c; }
+    }
+  });
+  // 마감장표 판별: 지점명 + (당월누적매출 또는 당월누적) 컬럼이 있어야 유효한 헤더로 인정
+  const hasSales = map.name!=null && (map.curSales!=null || map.royaltyPct!=null);
+  return hasSales ? map : null;
+}
+
+function parseArchiveWorkbook(wb){
+  const result = { brands:{}, royalty:{} };
+  const sheetNames = wb.SheetNames.filter(n=>n.includes('마감장표'));
+  const targets = sheetNames.length ? sheetNames : wb.SheetNames;
+  targets.forEach(sn=>{
+    const grid = XLSX.utils.sheet_to_json(wb.Sheets[sn], {header:1, raw:true, defval:null});
+    let currentBrand = null;
+    let i = 0;
+    while(i < grid.length){
+      const row = grid[i] || [];
+      const map = matchHeaderRow(row);
+      if(map){
+        // 브랜드명: 이 헤더 위 1~2줄 안에서 브랜드 이름이 들어있는 셀을 찾는다
+        for(let back=1; back<=3 && i-back>=0; back++){
+          const text = (grid[i-back]||[]).map(cellText).join(' ');
+          const hit = BRANDS.find(b=>text.includes(b));
+          if(hit){ currentBrand = hit; break; }
+        }
+        const isRoyalty = map.royaltyPct!=null;
+        const rows = [];
+        let r = i+1;
+        while(r < grid.length){
+          const dataRow = grid[r] || [];
+          const nameVal = cellText(dataRow[map.name]);
+          if(!nameVal || nameVal==='합계' || nameVal==='계'){ break; }
+          if(matchHeaderRow(dataRow)) break; // 다음 블록 헤더를 만나면 중단
+          if(isRoyalty){
+            rows.push({
+              name:nameVal, region: map.region!=null?cellText(dataRow[map.region]):'',
+              opened: map.opened!=null?cellText(dataRow[map.opened]):'',
+              cur: toNum(dataRow[map.curSales]), proj: toNum(dataRow[map.proj]),
+              royaltyDisplay: map.royaltyPct!=null ? cellText(dataRow[map.royaltyPct]) : '-',
+              royCur: toNum(dataRow[map.royCur]), royProj: toNum(dataRow[map.royProj]),
+            });
+          }else{
+            const prevMonth = toNum(dataRow[map.prevMonth]);
+            const prevYear = toNum(dataRow[map.prevYear]);
+            const proj = toNum(dataRow[map.proj]);
+            rows.push({
+              name:nameVal, region: map.region!=null?cellText(dataRow[map.region]):'',
+              opened: map.opened!=null?cellText(dataRow[map.opened]):'',
+              prevDay: toNum(dataRow[map.prevDay]), receipts: toNum(dataRow[map.receipts]),
+              unit: toNum(dataRow[map.unit]), curSales: toNum(dataRow[map.curSales]),
+              proj, dayAvg: toNum(dataRow[map.dayAvg]),
+              prevMonth, momP: (prevMonth && proj!=null) ? (proj-prevMonth)/prevMonth : toNum(dataRow[map.momPct])/100,
+              prevYear, yoyP: (prevYear && proj!=null) ? (proj-prevYear)/prevYear : toNum(dataRow[map.yoyPct])/100,
+            });
+          }
+          r++;
+        }
+        if(currentBrand && rows.length){
+          if(isRoyalty) result.royalty[currentBrand] = rows;
+          else result.brands[currentBrand] = rows;
+        }
+        i = r;
+      }else{
+        i++;
+      }
+    }
+  });
+  return result;
 }
 
 async function copyNoticeAsImage(){
@@ -950,7 +1164,7 @@ function renderArchiveList(){
     return `<tr>
       <td class="txt" style="font-weight:600">${m}</td>
       <td class="txt">${a.fileName}</td>
-      <td class="txt" style="font-size:11.5px;color:var(--muted)">${new Date(a.uploadedAt).toLocaleString('ko-KR')}</td>
+      <td class="txt" style="font-size:11.5px;color:var(--muted)">${new Date(a.uploadedAt).toLocaleString('ko-KR')} · 브랜드 ${Object.keys(a.parsed?.brands||{}).length}개 인식</td>
       <td><button class="btn ghost small archive-del" data-month="${m}">삭제</button></td>
     </tr>`;
   }).join('') : `<tr><td colspan="4" class="txt" style="color:var(--muted)">아직 업로드된 마감장표가 없어요.</td></tr>`;
@@ -974,14 +1188,18 @@ document.getElementById('archiveUploadBtn').addEventListener('click', async ()=>
   try{
     const buf = await file.arrayBuffer();
     const wb = XLSX.read(buf, { type:'array' });
-    const sheetName = wb.SheetNames.find(n=>n.includes('마감장표')) || wb.SheetNames[0];
-    const sheet = wb.Sheets[sheetName];
-    const html = XLSX.utils.sheet_to_html(sheet, { editable:false });
-    ARCHIVES[month] = { fileName:file.name, uploadedAt:Date.now(), html, sheetName };
+    const parsed = parseArchiveWorkbook(wb);
+    const brandCount = Object.keys(parsed.brands).length;
+    if(!brandCount){
+      showToast('마감장표 형식을 인식하지 못했어요 — 지역/지점명/당월누적매출 등 컬럼명을 확인해주세요.');
+      btn.textContent = original;
+      return;
+    }
+    ARCHIVES[month] = { fileName:file.name, uploadedAt:Date.now(), parsed };
     saveArchives(ARCHIVES);
     renderArchiveList();
     populateNoticeMonthSelect();
-    showToast(`${month} 마감장표("${sheetName}" 시트)를 저장했어요.`);
+    showToast(`${month} 마감장표를 저장했어요 (${brandCount}개 브랜드 인식됨).`);
     document.getElementById('archiveFile').value = '';
   }catch(e){
     showToast('파일을 읽는 데 실패했어요. 엑셀(.xlsx) 파일이 맞는지 확인해주세요.');
