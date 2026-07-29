@@ -15,7 +15,7 @@ const RAW_STORES = [
   ['퐁당','정읍점','전북','OK포스',0.033], ['퐁당','오송점','충북','OK포스',0], ['퐁당','모현점','전북','OK포스',0],
   ['퐁당','율량점','충북','업솔루션',0.022], ['퐁당','광주첨단점','전북','업솔루션',0.033], ['퐁당','유성점','대전','업솔루션',0],
   ['퐁당','동남지구점','충북','업솔루션',0.033], ['퐁당','김포구래점','경기','업솔루션',0.033], ['퐁당','논산점','충남','업솔루션',0.022],
-  ['퐁당','세종점','세종','업솔루션',0], ['퐁당','청주봉명점','충북','업솔루션',0.033], ['퐁당','전주송천점','전북','업솔루션',0.033],
+  ['퐁당','세종점','세종','업솔루션',0], ['퐁당','청주봉명점','충북','업솔루션',0.033], ['퐁당','전주송천점','전북','업솔루션',0.022],
   ['유림대패','비하점','충북','유니온포스',0],
   ['려원장어','세종점','세종','유플러스포스',0],
   ['얼얼하이','성안점','충북','업솔루션',0], ['얼얼하이','아산용화점','충남','업솔루션',0,300000],
@@ -35,15 +35,30 @@ const OPENED_DATES = {
   '얼얼하이(성안점)':'2025-12-08', '얼얼하이(아산용화점)':'2026-05-01',
 };
 
-const STORES = RAW_STORES.map(([brand,name,region,pos,royalty,royaltyFixed],i)=>({
-  id:i, brand, name:`${brand}(${name})`, short:name, region, pos,
-  area: 20 + Math.round(Math.random()*70),
-  rent: 150 + Math.round(Math.random()*350),
-  royalty, royaltyFixed: royaltyFixed || null,
-  opened: OPENED_DATES[`${brand}(${name})`] || `20${20+(i%6)}-0${1+(i%9)%9}-1${(i%9)+1}`,
-}));
+function loadStoreOverrides(){
+  const raw = localStorage.getItem('yfp_store_overrides');
+  if(raw){ try{ return JSON.parse(raw); }catch(e){} }
+  return {};
+}
+function saveStoreOverrides(o){ localStorage.setItem('yfp_store_overrides', JSON.stringify(o)); }
+let STORE_OVERRIDES = loadStoreOverrides();
+
+const STORES = RAW_STORES.map(([brand,name,region,pos,royalty,royaltyFixed],i)=>{
+  const fullName = `${brand}(${name})`;
+  const base = {
+    id:i, brand, name:fullName, short:name, region, pos,
+    type:'가맹점', owner:'', bizNo:'', address:'',
+    area: 20 + Math.round(Math.random()*70),
+    rent: 150 + Math.round(Math.random()*350),
+    royalty, royaltyFixed: royaltyFixed || null,
+    opened: OPENED_DATES[fullName] || `20${20+(i%6)}-0${1+(i%9)%9}-1${(i%9)+1}`,
+  };
+  return STORE_OVERRIDES[fullName] ? {...base, ...STORE_OVERRIDES[fullName]} : base;
+});
 
 const BRANDS = ['퐁당','유림대패','려원장어','얼얼하이'];
+const BRAND_COLORS = { '퐁당':'#2B6CB0', '유림대패':'#2F9E5C', '려원장어':'#D98B2B', '얼얼하이':'#B0323F' };
+const BRAND_COLOR_LIST = BRANDS.map(b=>BRAND_COLORS[b]);
 const PERIODS = ['당월누적','전일','토요일','전월','전년동월'];
 const PERIOD_DAYS_DEFAULT = { '당월누적':26, '전일':1, '토요일':1, '전월':30, '전년동월':28 };
 const MONTH_TOTAL_DAYS = 31;
@@ -188,9 +203,10 @@ const TITLES = {
   analysis:['매출성과분석표','브랜드별 · 기간별 비교 분석'],
   stores:['매장별현황','지점 기본정보 및 최근 실적'],
   entry:['매출 데이터 입력','포스 화면 표를 그대로 붙여넣으세요'],
+  admin:['가맹점 정보 관리','지점 기본정보 · 계약정보 등록 및 수정'],
 };
-const NAV_ICON = { report:'▤', notice:'▥', analysis:'◈', stores:'▦', entry:'✎' };
-const DEFAULT_NAV_ORDER = ['report','notice','analysis','stores','entry'];
+const NAV_ICON = { report:'▤', notice:'▥', analysis:'◈', stores:'▦', entry:'✎', admin:'⚙' };
+const DEFAULT_NAV_ORDER = ['report','notice','analysis','stores','entry','admin'];
 
 function loadNavOrder(){
   const raw = localStorage.getItem('yfp_nav_order');
@@ -307,7 +323,7 @@ function renderMiniDashboard(list, period){
   if(miniCharts.brand) miniCharts.brand.destroy();
   miniCharts.brand = new Chart(document.getElementById('miniBrandChart'), {
     type:'doughnut',
-    data:{ labels:BRANDS, datasets:[{ data:BRANDS.map(b=>brandTotals[b]), backgroundColor:['#2B4C8C','#1B2C50','#6C749A','#101B33'], borderWidth:2, borderColor:'#fff' }] },
+    data:{ labels:BRANDS, datasets:[{ data:BRANDS.map(b=>brandTotals[b]), backgroundColor:BRAND_COLOR_LIST, borderWidth:2, borderColor:'#fff' }] },
     options:{ ...miniOpts, plugins:{legend:{position:'bottom', labels:{boxWidth:8, font:{size:9}}}} }
   });
 
@@ -530,7 +546,7 @@ function renderAnalysis(){
   if(charts.pie) charts.pie.destroy();
   charts.pie = new Chart(ctx1, { type:'doughnut',
     data:{ labels:BRANDS, datasets:[{ data:BRANDS.map(b=>brandTotals[b]),
-      backgroundColor:['#2B4C8C','#1B2C50','#6C749A','#101B33'], borderWidth:2, borderColor:'#fff' }]},
+      backgroundColor:BRAND_COLOR_LIST, borderWidth:2, borderColor:'#fff' }]},
     options:{ plugins:{legend:{position:'bottom', labels:{font:{family:'Pretendard'}, boxWidth:10}}} } });
 
   const withCompare = STORES.map(s=>({ name:s.short, brand:s.brand, mom:momChange(s.name), yoy:yoyChange(s.name) }))
@@ -608,11 +624,11 @@ function openStoreModal(id){
     <h2>${s.short} <span class="brand-tag tag-${s.brand}">${s.brand}</span></h2>
     <div style="font-size:12.5px;color:var(--muted)">${s.region} · ${s.pos} 연동 · 상세분석</div>
 
-    <div class="grid kpis" style="grid-template-columns:repeat(4,1fr);margin-top:16px;">
-      <div class="card kpi" style="padding:12px;"><div class="label">당월누적</div><div class="value" style="font-size:16px;">${won(cur?.sales)}</div></div>
-      <div class="card kpi" style="padding:12px;"><div class="label">예상마감</div><div class="value" style="font-size:16px;">${won(proj)}</div></div>
-      <div class="card kpi" style="padding:12px;"><div class="label">전월대비</div><div class="value ${mom>=0?'delta up':'delta down'}" style="font-size:16px;">${mom==null?'-':pct(mom)}</div></div>
-      <div class="card kpi" style="padding:12px;"><div class="label">전년동월대비</div><div class="value ${yoy>=0?'delta up':'delta down'}" style="font-size:16px;">${yoy==null?'-':pct(yoy)}</div></div>
+    <div class="modal-kpis">
+      <div class="modal-kpi"><div class="mk-label">당월누적</div><div class="mk-value">${won(cur?.sales)}</div></div>
+      <div class="modal-kpi"><div class="mk-label">예상마감</div><div class="mk-value">${won(proj)}</div></div>
+      <div class="modal-kpi"><div class="mk-label">전월대비</div><div class="mk-value ${mom==null?'':(mom>=0?'up':'down')}">${mom==null?'-':pct(mom)}</div></div>
+      <div class="modal-kpi"><div class="mk-label">전년동월대비</div><div class="mk-value ${yoy==null?'':(yoy>=0?'up':'down')}">${yoy==null?'-':pct(yoy)}</div></div>
     </div>
 
     <div class="mini-title" style="margin-top:20px;">기간별 실매출액 비교</div>
@@ -808,12 +824,72 @@ function tickClock(){
 tickClock(); setInterval(tickClock, 1000*30);
 
 /* ---------- 전체 렌더 ---------- */
+/* ---------- 가맹점 정보 관리 ---------- */
+const ADMIN_FIELDS = [
+  ['region','지역','text'], ['type','가맹점/직영점','select'], ['owner','대표자명','text'],
+  ['bizNo','사업자번호','text'], ['address','소재지 주소','text'],
+  ['royaltyPct','로열티(%)','number'], ['opened','사업개시일','text'],
+  ['area','평수','number'], ['rent','월 임대료(만원)','number'],
+];
+let adminQuery = '';
+function renderAdmin(){
+  const list = STORES.filter(s=>!adminQuery || s.name.includes(adminQuery));
+  const grid = document.getElementById('adminGrid');
+  grid.innerHTML = `
+    <thead><tr><th>매장명</th>${ADMIN_FIELDS.map(f=>`<th>${f[1]}</th>`).join('')}</tr></thead>
+    <tbody>${list.map(s=>`
+      <tr data-store="${s.name}">
+        <td class="fixed">${s.name}</td>
+        ${ADMIN_FIELDS.map(([key,label,type])=>{
+          if(key==='type'){
+            return `<td><select data-field="type" style="width:100%;height:100%;border:none;padding:6px 8px;">
+              <option value="가맹점" ${s.type==='가맹점'?'selected':''}>가맹점</option>
+              <option value="직영점" ${s.type==='직영점'?'selected':''}>직영점</option>
+            </select></td>`;
+          }
+          if(key==='royaltyPct'){
+            const v = s.royaltyFixed ? '' : (s.royalty ? +(s.royalty*100).toFixed(2) : '');
+            return `<td><input type="number" step="0.1" data-field="royaltyPct" value="${v}" placeholder="${s.royaltyFixed?'정액:'+s.royaltyFixed:''}"></td>`;
+          }
+          const val = s[key] ?? '';
+          const isText = type==='text';
+          return `<td><input type="${type}" data-field="${key}" value="${val}" style="${isText?'text-align:left;':''}"></td>`;
+        }).join('')}
+      </tr>`).join('')}</tbody>`;
+}
+document.getElementById('adminSearch').addEventListener('input', e=>{ adminQuery=e.target.value.trim(); renderAdmin(); });
+document.getElementById('adminSaveBtn').addEventListener('click', ()=>{
+  document.querySelectorAll('#adminGrid tbody tr').forEach(row=>{
+    const name = row.dataset.store;
+    const cur = STORE_OVERRIDES[name] || {};
+    const liveStore = STORES.find(s=>s.name===name);
+    row.querySelectorAll('[data-field]').forEach(el=>{
+      const f = el.dataset.field;
+      if(f==='royaltyPct'){
+        if(el.value!==''){ cur.royalty = +el.value/100; if(liveStore) liveStore.royalty = cur.royalty; }
+      }else if(el.tagName==='SELECT'){
+        cur[f] = el.value; if(liveStore) liveStore[f] = el.value;
+      }else if(el.type==='number'){
+        const v = el.value==='' ? undefined : +el.value;
+        cur[f] = v; if(liveStore && v!==undefined) liveStore[f] = v;
+      }else{
+        cur[f] = el.value; if(liveStore) liveStore[f] = el.value;
+      }
+    });
+    STORE_OVERRIDES[name] = cur;
+  });
+  saveStoreOverrides(STORE_OVERRIDES);
+  showToast('가맹점 정보를 저장했어요 — 다른 화면에도 바로 반영돼요.');
+  renderAll();
+});
+
 function renderAll(){
   if(state.view==='report') renderReportTable();
   if(state.view==='notice') renderNotice();
   if(state.view==='analysis') renderAnalysis();
   if(state.view==='stores') renderStores();
   if(state.view==='entry') renderEntry();
+  if(state.view==='admin') renderAdmin();
 }
 initNoticeDate();
 renderNav();
