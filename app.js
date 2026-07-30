@@ -33,8 +33,22 @@
     #view-entry .grid-table{
       display:table;
     }
-    /* 사이드바: 세로 스크롤은 함께 움직이지만 가로 스크롤 시에는 밀리지 않도록.
-       (position:sticky top:0은 원본에 있음 — 그대로 유지) */
+    /* 사이드바: 가로/세로 스크롤 무관하게 항상 고정.
+       내용이 많아 뷰포트 높이보다 길어지면 사이드바 내부에서만 자체 스크롤 (하단 안 잘림). */
+    .side{
+      position:fixed !important;
+      top:0 !important;
+      left:0 !important;
+      width:232px !important;
+      height:100vh !important;
+      overflow-y:auto !important;
+      z-index:100 !important;
+    }
+    /* 메인 콘텐츠는 사이드바 폭만큼 들여쓰기 */
+    .shell{ grid-template-columns: 232px 1fr !important; }
+    @media (max-width: 900px){
+      .side{ position:fixed !important; }
+    }
   `;
   document.head.appendChild(st);
 })();
