@@ -2,6 +2,21 @@
    유림에퐁당 통합현황 — 데이터 모델 & 렌더링
 ===================================================================== */
 
+
+/* ---------- 공지용 마감장표 전용 CSS 주입 ---------- */
+// 공지용 화면에서만 .main의 max-width를 풀어 화면 폭까지 확장.
+// 다른 화면은 영향 없음 (body.view-notice 클래스로 스코프 제한).
+(function injectNoticeFullWidthCss(){
+  if(document.getElementById('notice-fullwidth-css')) return;
+  const st = document.createElement('style');
+  st.id = 'notice-fullwidth-css';
+  st.textContent = `
+    body.view-notice .main{ max-width:none !important; }
+    body.view-notice .notice-block{ overflow:hidden !important; }
+  `;
+  document.head.appendChild(st);
+})();
+
 /* ---------- 지점 정의 ---------- */
 const RAW_STORES = [
   ['퐁당','탕정점','충남','OK포스',0.022], ['퐁당','전주혁신점','전북','OK포스',0.033],
@@ -551,6 +566,8 @@ function bindNavClicks(){
       document.getElementById('pageTitle').textContent = TITLES[v][0];
       document.getElementById('pageSub').textContent = TITLES[v][1];
       document.getElementById('side').classList.remove('open');
+      // 공지용 화면일 때만 .main의 max-width 해제
+      document.body.classList.toggle('view-notice', v === 'notice');
       renderAll();
     });
   });
@@ -852,10 +869,27 @@ function applyNoticeFixedLayout(){
   if(salesTables.length) applyNoticeAutoWidths(salesTables, salesCont);
   if(royTables.length)   applyNoticeAutoWidths(royTables, royCont);
 }
-// 창 크기 바뀌면 재계산
+// 창 크기 바뀌면 재계산 (debounce)
+let _noticeResizeTimer = null;
 window.addEventListener('resize', ()=>{
-  if(state.view === 'notice') requestAnimationFrame(applyNoticeFixedLayout);
+  if(state.view !== 'notice') return;
+  if(_noticeResizeTimer) clearTimeout(_noticeResizeTimer);
+  _noticeResizeTimer = setTimeout(()=>{
+    applyNoticeFixedLayout();
+    _noticeResizeTimer = null;
+  }, 80);
 });
+// ResizeObserver로 컨테이너 폭 변화도 감지 (사이드바 접기/펼치기 등)
+if(typeof ResizeObserver !== 'undefined'){
+  const ro = new ResizeObserver(()=>{
+    if(state.view === 'notice'){
+      if(_noticeResizeTimer) clearTimeout(_noticeResizeTimer);
+      _noticeResizeTimer = setTimeout(applyNoticeFixedLayout, 60);
+    }
+  });
+  const mainEl = document.querySelector('.main');
+  if(mainEl) ro.observe(mainEl);
+}
 
 document.querySelectorAll('#noticeSubTab button').forEach(b=>b.addEventListener('click', ()=>{
   document.querySelectorAll('#noticeSubTab button').forEach(x=>x.classList.remove('active'));
@@ -1714,5 +1748,6 @@ function renderAll(){
 }
 initNoticeDate();
 populateNoticeMonthSelect();
+document.body.classList.toggle('view-notice', state.view === 'notice');
 renderNav();
 renderAll();
