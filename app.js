@@ -13,6 +13,28 @@
   st.textContent = `
     body.view-notice .main{ max-width:none !important; }
     body.view-notice .notice-block{ overflow:hidden !important; }
+
+    /* ---------- 가맹점 정보관리 & 매출 데이터 입력: 표만 가로 스크롤 ---------- */
+    /* 페이지 전체(body/html)가 가로 스크롤되지 않게 → 사이드바가 밀리지 않음.
+       표는 자기 컨테이너(.grid-scroll) 안에서만 가로 스크롤. */
+    html, body{ overflow-x:hidden !important; }
+    .shell{ max-width:100vw; overflow-x:hidden; }
+    .main{ min-width:0; max-width:100%; overflow-x:hidden; }
+    /* 표 컨테이너: 이 안에서만 가로 스크롤이 발생 */
+    #view-admin .grid-scroll,
+    #view-entry .grid-scroll{
+      overflow-x:auto !important;
+      overflow-y:auto !important;
+      max-width:100%;
+      width:100%;
+    }
+    /* 표 자체는 자연 폭 유지 (컨테이너를 벗어나면 스크롤) */
+    #view-admin .grid-table,
+    #view-entry .grid-table{
+      display:table;
+    }
+    /* 사이드바 확실히 고정 */
+    .side{ position:sticky !important; top:0 !important; z-index:50; }
   `;
   document.head.appendChild(st);
 })();
