@@ -44,7 +44,7 @@
         overflow-y:auto; overflow-x:hidden;
         z-index:30;
       }
-      .main{ width:calc(100% - 232px); margin-left:232px; }
+      .main{ width:calc(100% - 232px) !important; margin-left:232px !important; }
     }
   `;
   document.head.appendChild(st);
@@ -1446,6 +1446,8 @@ function attachNameValidation(grid, schema, account){
   };
   nameInputs.forEach(inp=>{
     check(inp);
+    if(inp.dataset.validationBound) return;
+    inp.dataset.validationBound = '1';
     inp.addEventListener('input', ()=>check(inp));
     inp.addEventListener('paste', ()=>setTimeout(()=>{
       nameInputs.forEach(check);
@@ -1453,19 +1455,77 @@ function attachNameValidation(grid, schema, account){
   });
 }
 
+// 붙여넣은 데이터가 현재 표의 행 수보다 많을 때, 그만큼 빈 행을 늘려준다.
+function ensureEntryRows(grid, neededRows, schema){
+  const tbody = grid.querySelector('tbody');
+  if(!tbody) return;
+  let current = tbody.children.length;
+  while(current < neededRows){
+    const tr = document.createElement('tr');
+    tr.innerHTML = schema.fields.map(f=>{
+      const isText = TEXT_FIELDS.has(f);
+      return `<td><input type="${isText?'text':'number'}" data-field="${f}" value="" style="${isText?'text-align:left;font-weight:600;':''}"></td>`;
+    }).join('');
+    tbody.appendChild(tr);
+    current++;
+  }
+}
+
+// 붙여넣은 지점명 중 등록된 지점과 매칭되지 않는 게 있으면(신규 지점) 자동으로 가맹점 목록에
+// 등록해준다 — 계정이 브랜드 하나로 고정돼 있거나, 붙여넣은 글자 안에 브랜드명이 포함돼 있을
+// 때만. 어느 브랜드인지 알 수 없으면 조용히 넘어가고(기존처럼 저장 시 "지점명 불일치"로 안내).
+function autoRegisterPastedStores(grid, schema, account){
+  const cfg = ACCOUNTS[account];
+  const nameInputs = Array.from(grid.querySelectorAll(`tbody input[data-field="${schema.storeField}"]`));
+  const created = [];
+  nameInputs.forEach(inp=>{
+    const pastedName = inp.value.trim();
+    if(!pastedName) return;
+    if(matchStore(pastedName, account)) return;
+    const brand = (cfg.brands && cfg.brands.length===1) ? cfg.brands[0] : BRANDS.find(b=>pastedName.includes(b));
+    if(!brand) return;
+    const baseShort = pastedName.replace(brand,'').replace(/[()]/g,'').trim() || pastedName;
+    let short = baseShort, fullName = `${brand}(${short})`, n = 1;
+    while(STORES.some(s=>s.name===fullName)){ n++; short = `${baseShort}${n}`; fullName = `${brand}(${short})`; }
+    STORES.push({
+      id: nextStoreId(), brand, name: fullName, short,
+      region:'', pos: cfg.schema, type:'가맹점', owner:'', bizNo:'', address:'',
+      area:0, rent:0, royalty:0, royaltyFixed:null, opened:'',
+    });
+    inp.value = fullName;
+    created.push(fullName);
+  });
+  if(created.length){
+    saveStores(STORES);
+    renderPosTabs();
+    showToast(`새 지점 ${created.length}곳을 등록했어요: ${created.slice(0,3).join(', ')}${created.length>3?' 외':''} — 가맹점 정보 관리에서 지역·대표자명 등 세부 정보를 채워주세요.`);
+  }
+}
+
 function attachPasteHandler(grid){
-  const schema = POS_SCHEMA[ACCOUNTS[state.entryPos].schema];
-  const inputs = Array.from(grid.querySelectorAll('input'));
+  const account = state.entryPos;
+  const schema = POS_SCHEMA[ACCOUNTS[account].schema];
   const cols = schema.fields.length;
-  inputs.forEach((inp, idx)=>{
+  Array.from(grid.querySelectorAll('tbody input')).forEach(inp=>{
+    if(inp.dataset.pasteBound) return;
+    inp.dataset.pasteBound = '1';
     inp.addEventListener('paste', (e)=>{
       const text = (e.clipboardData || window.clipboardData).getData('text');
       if(!text.includes('\t') && !text.includes('\n')) return;
       e.preventDefault();
-      const rows = text.replace(/\r/g,'').split('\n').filter(r=>r.length);
+      const pastedRows = text.replace(/\r/g,'').split('\n').filter(r=>r.length);
+
+      // 시작 칸의 실제 행/열 위치는 붙여넣는 시점에 다시 계산 (행이 늘어난 뒤에도 정확해야 함)
+      const allNow = Array.from(grid.querySelectorAll('tbody input'));
+      const idx = allNow.indexOf(inp);
       const startRow = Math.floor(idx / cols);
       const startCol = idx % cols;
-      rows.forEach((rowText, rOff)=>{
+
+      // 붙여넣은 행 수가 현재 칸 수보다 많으면 자동으로 행을 늘림
+      ensureEntryRows(grid, startRow + pastedRows.length, schema);
+
+      const inputs = Array.from(grid.querySelectorAll('tbody input'));
+      pastedRows.forEach((rowText, rOff)=>{
         const cells = rowText.split('\t');
         cells.forEach((val, cOff)=>{
           const targetRow = startRow + rOff;
@@ -1481,6 +1541,11 @@ function attachPasteHandler(grid){
           }
         });
       });
+
+      attachPasteHandler(grid); // 새로 생긴 행의 입력칸에도 붙여넣기 연결 (이미 연결된 칸은 건너뜀)
+      autoRegisterPastedStores(grid, schema, account);
+      attachNameValidation(grid, schema, account);
+      setupExcelResize(grid, 'entry-'+ACCOUNTS[account].schema);
     });
   });
 }
