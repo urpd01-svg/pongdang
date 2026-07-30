@@ -1,12 +1,9 @@
 /* =====================================================================
    유림에퐁당 통합현황 — 데이터 모델 & 렌더링
-   실 서비스로 옮길 때는 STORES / SALES 을 API 응답으로 교체하고,
-   localStorage 저장 부분을 서버 저장(POST) 으로 바꾸면 됩니다.
 ===================================================================== */
 
-/* ---------- 지점 정의 (지점명 → 실제 사용 포스) ---------- */
+/* ---------- 지점 정의 ---------- */
 const RAW_STORES = [
-  // brand, name, region, pos, 로열티율(실제 파일 기준, 미확정 0)
   ['퐁당','탕정점','충남','OK포스',0.022], ['퐁당','전주혁신점','전북','OK포스',0.033],
   ['유림대패','오창점','충북','OK포스',0],
   ['퐁당','공주점','충남','OK포스',0.033], ['퐁당','대구만촌','대구','OK포스',0.022], ['퐁당','세종시청','세종','OK포스',0.033],
@@ -58,8 +55,6 @@ function buildInitialStores(){
     return STORE_OVERRIDES[fullName] ? {...base, ...STORE_OVERRIDES[fullName]} : base;
   });
 }
-// 지점 목록을 localStorage에서 직접 읽고 쓴다 (처음 한 번만 RAW_STORES+기존 수정값으로 초기화).
-// 이렇게 해야 화면에서 지점을 추가/삭제하거나 항목을 고쳐도 새로고침 후에도 그대로 남는다.
 function loadStores(){
   const raw = localStorage.getItem(STORES_KEY);
   if(raw){ try{ return JSON.parse(raw); }catch(e){} }
@@ -72,8 +67,6 @@ const STORES = loadStores();
 function nextStoreId(){ return STORES.reduce((m,s)=>Math.max(m,s.id), -1) + 1; }
 
 const BRANDS = ['퐁당','유림대패','려원장어','얼얼하이'];
-// 마감장표 엑셀에 브랜드명이 다르게 적혀 있는 경우의 별칭 (예: 얼얼하이 -> 마라꼬치로 표기 변경).
-// 값(오른쪽)은 반드시 BRANDS 배열 안에 있는 이름이어야 함.
 const BRAND_ALIASES = { '마라꼬치':'얼얼하이' };
 const BRAND_COLORS = { '퐁당':'#2B6CB0', '유림대패':'#2F9E5C', '려원장어':'#D98B2B', '얼얼하이':'#B0323F' };
 const BRAND_COLOR_LIST = BRANDS.map(b=>BRAND_COLORS[b]);
@@ -81,7 +74,6 @@ const PERIODS = ['당월누적','전일','토요일','전월','전년동월'];
 const PERIOD_DAYS_DEFAULT = { '당월누적':26, '전일':1, '토요일':1, '전월':30, '전년동월':28 };
 const MONTH_TOTAL_DAYS = 31;
 
-/* ---------- 기준일(마감 기준일) 자동 계산 — 기본값: 어제 ---------- */
 function defaultRefDate(){
   const d = new Date(); d.setDate(d.getDate()-1);
   return d.toISOString().slice(0,10);
@@ -101,7 +93,6 @@ function autoDaysFor(period){
   return PERIOD_DAYS_DEFAULT[period] || 30;
 }
 
-/* ---------- 포스별 원본 컬럼 스키마 (그대로 붙여넣기용) ---------- */
 const TEXT_FIELDS = new Set(['매장명','매장코드','매출일자']);
 const POS_SCHEMA = {
   'OK포스':      { fields:['매장명','총매출액','총할인액','실매출액','가액','부가세','영업일수','일평균 실매출액','영수건수','영수단가','객수','객단가','점유율(%)','결제합계','단순현금','현금영수','신용카드'],
@@ -115,8 +106,6 @@ const POS_SCHEMA = {
 };
 const POS_LIST = Object.keys(POS_SCHEMA);
 
-// 같은 포스(시스템)라도 브랜드별로 계정이 분리되어 있으면 여기서 나눠주세요.
-// key = 화면에 보일 탭 이름, schema = 어떤 POS_SCHEMA(컬럼 구성)를 쓸지, brands = 해당 계정에 속한 브랜드(null이면 그 포스 전체)
 const ACCOUNTS = {
   'OK포스':          { schema:'OK포스',    brands:null },
   '업솔루션(퐁당)':   { schema:'업솔루션',  brands:['퐁당'] },
@@ -134,7 +123,6 @@ function storesForAccount(account){
   return STORES.filter(s=>accountOf(s)===account);
 }
 
-/* ---------- 예시 매출 데이터 생성 ---------- */
 function seedSales(){
   const base = {};
   PERIODS.forEach(period=>{
@@ -176,14 +164,21 @@ function loadSales(){
 function saveSales(data){ localStorage.setItem('yfp_sales_v2', JSON.stringify(data)); }
 let SALES = loadSales();
 
-/* ---------- 계산 헬퍼 ---------- */
 const won = n => n==null || isNaN(n) ? '-' : Math.round(n).toLocaleString('ko-KR');
 const pct = n => n==null || isNaN(n) ? '-' : (n>=0?'+':'') + (n*100).toFixed(1) + '%';
 const royPct = r => !r ? '-' : (r*100).toFixed(1) + '%';
 
-/* ---------- 표 컬럼 크기: 기본은 글씨 크기(내용)에 맞게 자동, 헤더 오른쪽 경계를 끌면 직접 조정 ---------- */
-// rowspan/colspan이 섞인 헤더(예: 공지용 마감장표의 2줄 헤더)도 각 셀이 실제로 몇 번째
-// 컬럼에서 시작해 몇 칸을 차지하는지 정확히 계산해준다.
+/* =====================================================================
+   컬럼 크기 자동/수동 조정
+   ★ 수정본 핵심 아이디어
+   1) 저장은 폭(px)뿐 아니라 "사용자가 수동으로 조정했는지(manual flag)"까지 함께
+      저장 → 타이핑 자동확장이 수동 조정폭을 덮어쓰지 못하게 한다.
+   2) attachAutoFitOnType은 manual 컬럼은 절대 건드리지 않는다.
+   3) #entryGrid / #adminGrid 는 매 렌더마다 innerHTML이 새로 만들어지므로,
+      리사이즈 handle을 셀 안쪽 요소가 아니라 <th> 자체에 pointerdown 위임 방식으로 붙여서
+      셀 안의 input/select가 이벤트를 가로채는 문제도 함께 방지한다.
+===================================================================== */
+
 function resolveColSpans(theadRows){
   const occupied = [];
   const cellCols = new Map();
@@ -206,6 +201,7 @@ function resolveColSpans(theadRows){
   });
   return { cellCols, colCount:maxCol };
 }
+
 function measureColumnWidths(table, cellCols, colCount){
   const measured = new Array(colCount).fill(0);
   cellCols.forEach(({start,span}, cell)=>{
@@ -227,23 +223,34 @@ function measureColumnWidths(table, cellCols, colCount){
   });
   return measured;
 }
-function loadColWidths(key){
-  try{ return JSON.parse(localStorage.getItem('yfp_colw_'+key) || '{}'); }catch(e){ return {}; }
+
+/* 저장 포맷: { widths:{0:120, 1:80,...}, manual:{0:true} }
+   과거 포맷(폭 숫자만 저장) 도 호환한다. */
+function loadColState(key){
+  try{
+    const raw = localStorage.getItem('yfp_colw_'+key);
+    if(!raw) return { widths:{}, manual:{} };
+    const parsed = JSON.parse(raw);
+    if(parsed && typeof parsed==='object' && parsed.widths) return { widths:parsed.widths||{}, manual:parsed.manual||{} };
+    return { widths: parsed || {}, manual:{} };
+  }catch(e){ return { widths:{}, manual:{} }; }
 }
-function saveColWidth(key, idx, width){
-  const all = loadColWidths(key);
-  all[idx] = width;
-  localStorage.setItem('yfp_colw_'+key, JSON.stringify(all));
+function saveColState(key, state){ localStorage.setItem('yfp_colw_'+key, JSON.stringify(state)); }
+function saveColWidth(key, idx, width, manual){
+  const st = loadColState(key);
+  st.widths[idx] = width;
+  if(manual) st.manual[idx] = true;
+  saveColState(key, st);
 }
+
 let _measureCanvasCtx = null;
 function textPixelWidth(text, font){
   if(!_measureCanvasCtx) _measureCanvasCtx = document.createElement('canvas').getContext('2d');
   _measureCanvasCtx.font = font;
   return _measureCanvasCtx.measureText(text ?? '').width;
 }
-// 입력칸에 타이핑하거나 드롭다운을 바꿀 때, 그 글자가 다 보이도록 컬럼을 자동으로 넓혀준다
-// (좁히지는 않음 — 직접 좁힌 폭을 타이핑이 다시 늘려버리지 않게 하려면 별도 처리가 필요해서,
-//  여기서는 "필요하면 넓어진다"만 보장한다)
+
+// 타이핑 자동확장: 수동으로 조정한 컬럼(manual=true)은 절대 건드리지 않는다.
 function attachAutoFitOnType(table, key){
   const colgroup = table.querySelector('colgroup');
   if(!colgroup) return;
@@ -251,16 +258,20 @@ function attachAutoFitOnType(table, key){
   const grow = (el)=>{
     const td = el.closest('td');
     if(!td) return;
-    const colIdx = Array.from(td.parentNode.children).indexOf(td);
+    const tr = td.parentNode;
+    const colIdx = Array.from(tr.children).indexOf(td);
     const col = cols[colIdx];
     if(!col) return;
+    const st = loadColState(key);
+    if(st.manual[colIdx]) return; // 수동 조정된 컬럼은 그대로 둔다
     const cs = getComputedStyle(el);
     const text = el.tagName==='SELECT' ? (el.options[el.selectedIndex]?.text || '') : el.value;
     const needed = Math.ceil(textPixelWidth(text, `${cs.fontSize} ${cs.fontFamily}`)) + 28;
     const cur = parseFloat(col.style.width) || 0;
     if(needed > cur){
       col.style.width = needed + 'px';
-      saveColWidth(key, colIdx, needed);
+      st.widths[colIdx] = needed;
+      saveColState(key, st);
     }
   };
   table.querySelectorAll('tbody input, tbody select').forEach(el=>{
@@ -269,9 +280,6 @@ function attachAutoFitOnType(table, key){
   });
 }
 
-// [수정 1] 컬럼 리사이즈: pointer 이벤트를 handle이 아닌 document에 붙여야
-// 커서가 handle 밖으로 나가도 이벤트가 끊기지 않고 따라온다.
-// 또한 드래그 중에도 실시간으로 폭을 반영해 "커서가 안 따라오는" 느낌을 없앤다.
 let _resizeGuide = null;
 function getResizeGuide(){
   if(_resizeGuide && document.body.contains(_resizeGuide)) return _resizeGuide;
@@ -286,21 +294,18 @@ function getResizeGuide(){
   _resizeGuide = g;
   return g;
 }
+
 function setupColumnResize(table, key){
   if(!table || !table.tHead || !table.tBodies[0]) return;
   const theadRows = Array.from(table.tHead.rows);
   const { cellCols, colCount } = resolveColSpans(theadRows);
   if(!colCount) return;
-  // 측정 전에 반드시 auto로 되돌려둔다 — CSS 기본값이 fixed이거나(예: table.notice),
-  // 이전 렌더에서 이 표 엘리먼트에 남아있는 인라인 fixed 상태(예: 계속 재사용되는
-  // #entryGrid/#adminGrid)가 있으면, "글씨 크기에 맞는 폭"이 아니라 그 fixed 상태에서
-  // 뭉개진 폭을 측정하게 되어 컬럼이 다 비슷비슷한 폭으로 굳어버리는 문제가 있었다.
+
+  // 측정 전에 반드시 auto로 되돌린다
   table.style.tableLayout = 'auto';
   const measured = measureColumnWidths(table, cellCols, colCount);
-  const saved = loadColWidths(key);
-  // col 엘리먼트는 브라우저에 따라 getBoundingClientRect가 불안정할 수 있어서,
-  // 폭은 DOM에서 다시 읽지 않고 이 배열로 직접 추적한다.
-  const widths = new Array(colCount).fill(0).map((_,i)=> saved[i] || measured[i] || 60);
+  const saved = loadColState(key);
+  const widths = new Array(colCount).fill(0).map((_,i)=> saved.widths[i] || measured[i] || 60);
 
   const colgroup = document.createElement('colgroup');
   widths.forEach(w=>{
@@ -321,8 +326,10 @@ function setupColumnResize(table, key){
     const handle = document.createElement('span');
     handle.className = 'col-resize-handle';
     handle.title = '드래그해서 폭 조정';
-    handle.style.height = Math.ceil(cell.getBoundingClientRect().height) + 'px';
+    handle.dataset.colIdx = String(start);
 
+    // pointerdown은 handle에서 받고, move/up은 document 레벨에 붙여
+    // handle 영역을 벗어나도 커서를 그대로 따라가게 한다.
     handle.addEventListener('pointerdown', (e)=>{
       e.preventDefault(); e.stopPropagation();
       const startX = e.clientX;
@@ -337,9 +344,6 @@ function setupColumnResize(table, key){
       handle.classList.add('active');
       document.body.classList.add('col-resizing');
 
-      // ★ 핵심 수정: pointermove/up을 document에 붙여, 커서가 얇은 handle 영역을
-      // 벗어나도 계속 커서를 따라가게 한다. 또한 드래그 중에도 실시간으로 col 폭을
-      // 반영해서 사용자가 즉시 결과를 볼 수 있게 한다.
       const onMove = (ev)=>{
         finalW = Math.max(30, Math.round(startW + (ev.clientX-startX)));
         guide.style.left = ev.clientX + 'px';
@@ -354,7 +358,7 @@ function setupColumnResize(table, key){
         document.body.classList.remove('col-resizing');
         widths[start] = finalW;
         cols[start].style.width = finalW + 'px';
-        saveColWidth(key, start, finalW);
+        saveColWidth(key, start, finalW, true); // ★ manual=true 로 저장
       };
       document.addEventListener('pointermove', onMove);
       document.addEventListener('pointerup', onUp);
@@ -365,12 +369,9 @@ function setupColumnResize(table, key){
   return { cols, widths };
 }
 
-// [수정 4] 공지용 마감장표에서 여러 브랜드 표의 컬럼 폭을 하나로 맞춰준다.
-// 자동 정렬 + 각 표에서 직접 조정하면 모든 표에 동시 적용되도록.
+// 공지용 마감장표: 여러 브랜드 표를 하나의 공용 컬럼 폭으로 정렬
 function setupSharedColumnResize(tables, key){
   if(!tables.length) return;
-  // 1) 각 표별로 측정된 폭을 뽑아 컬럼별 최댓값을 찾는다 — 이렇게 하면 브랜드마다
-  //    "당월누적매출" 같은 컬럼의 최대 텍스트 폭에 맞춰 모든 표가 자동 정렬된다.
   const perTable = tables.map(t=>{
     if(!t.tHead || !t.tBodies[0]) return null;
     t.style.tableLayout = 'auto';
@@ -387,10 +388,9 @@ function setupSharedColumnResize(tables, key){
       if(p.measured[i] > merged[i]) merged[i] = p.measured[i];
     }
   });
-  const saved = loadColWidths(key);
-  const widths = new Array(colCount).fill(0).map((_,i)=> saved[i] || merged[i] || 60);
+  const saved = loadColState(key);
+  const widths = new Array(colCount).fill(0).map((_,i)=> saved.widths[i] || merged[i] || 60);
 
-  // 2) 모든 표에 같은 colgroup을 심는다
   perTable.forEach(p=>{
     const colgroup = document.createElement('colgroup');
     widths.forEach(w=>{
@@ -405,7 +405,6 @@ function setupSharedColumnResize(tables, key){
     p.cols = Array.from(colgroup.children);
   });
 
-  // 3) 리사이즈 핸들: 하나의 컬럼을 조정하면 모든 표의 같은 컬럼이 함께 변한다
   perTable.forEach(p=>{
     p.cellCols.forEach(({start,span}, cell)=>{
       if(span!==1) return;
@@ -414,7 +413,6 @@ function setupSharedColumnResize(tables, key){
       const handle = document.createElement('span');
       handle.className = 'col-resize-handle';
       handle.title = '드래그해서 폭 조정 (모든 브랜드 표에 함께 적용)';
-      handle.style.height = Math.ceil(cell.getBoundingClientRect().height) + 'px';
 
       handle.addEventListener('pointerdown', (e)=>{
         e.preventDefault(); e.stopPropagation();
@@ -448,7 +446,7 @@ function setupSharedColumnResize(tables, key){
           perTable.forEach(pp=>{
             if(pp.cols[start]) pp.cols[start].style.width = finalW + 'px';
           });
-          saveColWidth(key, start, finalW);
+          saveColWidth(key, start, finalW, true);
         };
         document.addEventListener('pointermove', onMove);
         document.addEventListener('pointerup', onUp);
@@ -458,6 +456,51 @@ function setupSharedColumnResize(tables, key){
     });
   });
 }
+
+// 페이지 로드시 한 번, 리사이즈에 필요한 CSS를 강제로 재보정한다.
+// index.html의 CSS 룰(th.resizable-th의 position/overflow)이 상황에 따라
+// sticky/overflow-hidden에 가려 handle이 잘리는 경우가 있어서, JS로 우선순위
+// 높은 인라인 스타일을 다시 심어준다.
+function injectResizeCss(){
+  if(document.getElementById('resize-css-fix')) return;
+  const st = document.createElement('style');
+  st.id = 'resize-css-fix';
+  st.textContent = `
+    /* handle을 셀 오른쪽 안쪽으로 이동하고 z-index를 크게 올려,
+       sticky 헤더/rounded overflow 컨테이너에 잘리지 않도록 함 */
+    th.resizable-th{ position:relative !important; overflow:visible !important; }
+    .col-resize-handle{
+      position:absolute !important;
+      top:0 !important;
+      right:0 !important;
+      width:10px !important;
+      height:100% !important;
+      cursor:col-resize !important;
+      z-index:50 !important;
+      touch-action:none !important;
+      background:transparent;
+    }
+    .col-resize-handle:hover, .col-resize-handle.active{
+      background:rgba(255,255,255,.35) !important;
+    }
+    .grid-table .col-resize-handle:hover, .grid-table .col-resize-handle.active,
+    table.notice .col-resize-handle:hover, table.notice .col-resize-handle.active{
+      background:rgba(43,76,140,.30) !important;
+    }
+    /* 셀 안의 input/select가 오른쪽 끝까지 꽉 채우면 handle 히트영역이 좁아지므로,
+       오른쪽에 10px 여백을 강제로 준다 */
+    .grid-table td > input, .grid-table td > select{
+      max-width: calc(100% - 10px) !important;
+    }
+    /* .table-wrap의 overflow-x:auto 는 유지하되, 사이드로 절대 위치한 handle이
+       thead sticky 위에 오도록 z-index를 확실히 확보한다 */
+    .grid-table thead th{ z-index:5; }
+    .grid-table thead th.resizable-th .col-resize-handle{ z-index:60 !important; }
+    body.col-resizing, body.col-resizing *{ cursor:col-resize !important; user-select:none !important; }
+  `;
+  document.head.appendChild(st);
+}
+injectResizeCss();
 
 function metricsFor(storeName, period){
   const store = STORES.find(s=>s.name===storeName);
@@ -812,7 +855,6 @@ function renderNotice(){
     }
     const dateStr = monthSel.value + ' 업로드본';
     let salesHtml = '';
-    // [수정 4] 브랜드 순서를 항상 BRANDS 순서(퐁당→유림대패→려원장어→얼얼하이)로 고정
     BRANDS.forEach((brand, i)=>{
       const rows = a.parsed.brands[brand];
       if(rows && rows.length) salesHtml += renderArchiveBrandBlock(brand, dateStr, rows, i===0);
@@ -841,7 +883,6 @@ function renderNotice(){
   setupNoticeTablesResize();
 }
 
-// [수정 4] 공지용 마감장표의 여러 브랜드 표를 하나의 공용 컬럼 폭으로 정렬
 function setupNoticeTablesResize(){
   const salesTables = Array.from(document.querySelectorAll('#noticeSalesContainer table.notice'));
   const royaltyTables = Array.from(document.querySelectorAll('#noticeRoyaltyContainer table.notice'));
@@ -867,7 +908,7 @@ function activeNoticeLabel(){
   return (activeNoticeContainerId()==='noticeRoyaltyContainer' ? '로열티현황' : '매출현황') + suffix;
 }
 
-/* ---------- 업로드된 엑셀을 "공지용 마감장표"와 같은 양식으로 렌더링 ---------- */
+/* ---------- 업로드된 엑셀 렌더링 ---------- */
 function displayStoreName(fullName){
   const s = cellText(fullName);
   const m = s.match(/\(([^()]+)\)\s*$/);
@@ -944,7 +985,6 @@ function renderArchiveRoyaltyBlock(brand, dateStr, rows){
   </div>`;
 }
 
-// 헤더 텍스트로 컬럼을 찾기 위한 별칭표
 const COL_ALIASES = {
   region:['지역'], name:['지점명','매장명'], opened:['사업개시일','개시일','개점일','오픈일'],
   prevDay:['전일매출'], receipts:['영수건수','누적영수건수'], unit:['영수단가'],
@@ -966,11 +1006,6 @@ function toNum(v){
   return isNaN(n) ? null : n;
 }
 
-// [수정 3] 사업개시일 셀 정규화
-// 엑셀 셀은 (1) 문자열 "2024-08-15" / "2024.8.15" / "2024/08/15" / "2024년 8월 15일"
-// (2) JS Date 객체 (XLSX가 cellDates:true나 raw:true+시리얼 변환으로 만들어냄)
-// (3) 순수 숫자(엑셀 날짜 시리얼 — 1900-01-01 기준 일수) 로 들어올 수 있다.
-// 이 함수는 어떤 형태든 "YYYY-MM-DD" 문자열로 통일해준다.
 function formatDateCell(v){
   if(v==null || v==='') return '';
   const pad = (n)=> String(n).padStart(2,'0');
@@ -978,27 +1013,20 @@ function formatDateCell(v){
     if(!(d instanceof Date) || isNaN(d.getTime())) return '';
     return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
   };
-  // (1) Date 객체
   if(v instanceof Date) return asISO(v);
-  // (2) 숫자 — 엑셀 시리얼 (1900-01-01 기준, 1900년 leap-bug 보정)
   if(typeof v === 'number' && isFinite(v) && v > 20000 && v < 80000){
-    // 25569 = 1970-01-01 의 엑셀 시리얼
     const ms = (v - 25569) * 86400 * 1000;
     return asISO(new Date(ms));
   }
-  // (3) 문자열
   const s = String(v).trim();
   if(!s) return '';
-  // YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD
   let m = s.match(/^(\d{4})[.\-\/년\s]+(\d{1,2})[.\-\/월\s]+(\d{1,2})/);
   if(m) return `${m[1]}-${pad(+m[2])}-${pad(+m[3])}`;
-  // YY.MM.DD (예: 24.08.15)
   m = s.match(/^(\d{2})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);
   if(m){
     const year = +m[1] < 70 ? 2000 + +m[1] : 1900 + +m[1];
     return `${year}-${pad(+m[2])}-${pad(+m[3])}`;
   }
-  // 순수 숫자 문자열 (엑셀 시리얼이 문자열로 들어온 경우)
   if(/^\d+(\.\d+)?$/.test(s)){
     const n = parseFloat(s);
     if(n > 20000 && n < 80000){
@@ -1006,7 +1034,6 @@ function formatDateCell(v){
       return asISO(new Date(ms));
     }
   }
-  // 그 외에는 Date.parse 시도, 실패하면 원문 그대로
   const d = new Date(s);
   if(!isNaN(d.getTime())) return asISO(d);
   return s;
@@ -1030,19 +1057,12 @@ function matchHeaderRow(row){
   return hasSales ? map : null;
 }
 
-// [수정 2] 업로드된 엑셀 rows에 STORES의 type(직영점/가맹점) 정보를 채워넣는다.
-// 이렇게 해야 renderArchiveBrandBlock의 `r.type==='직영점'` 판정이 동작해서
-// 지점명·사업개시일 셀에 초록 배경(.td-direct)이 정상적으로 입혀진다.
 function enrichRowWithStoreInfo(row){
-  // 엑셀에 원문 그대로 남을 수 있는 필드들을 정규화
   row.opened = formatDateCell(row.opened);
-  // 지점명 → 등록된 STORE 찾기
   const nameStr = cellText(row.name);
   if(!nameStr) return row;
   const normPasted = normalizeName(nameStr);
-  // 1) 완전 일치 (fullName 또는 short)
   let hit = STORES.find(s=> s.name===nameStr || s.short===nameStr);
-  // 2) 정규화 후 포함 관계
   if(!hit){
     hit = STORES.find(s=>{
       const fn = normalizeName(s.name);
@@ -1051,11 +1071,9 @@ function enrichRowWithStoreInfo(row){
     });
   }
   if(hit){
-    // 엑셀에 type 컬럼이 있으면 그것을 우선, 없으면 STORES의 type 적용
     if(!row.type || (row.type!=='가맹점' && row.type!=='직영점')){
       row.type = hit.type || '가맹점';
     }
-    // 사업개시일이 비어있으면 STORES 값으로 채움
     if(!row.opened) row.opened = hit.opened || '';
     if(!row.region) row.region = hit.region || '';
   }else{
@@ -1069,8 +1087,6 @@ function parseArchiveWorkbook(wb){
   const sheetNames = wb.SheetNames.filter(n=>n.includes('마감장표'));
   const targets = sheetNames.length ? sheetNames : wb.SheetNames;
   targets.forEach(sn=>{
-    // [수정 3] cellDates:true → 엑셀의 날짜 셀을 JS Date 객체로 받아온다
-    //           defval:'' → 빈 셀도 컬럼 위치가 어긋나지 않도록 유지
     const grid = XLSX.utils.sheet_to_json(wb.Sheets[sn], {header:1, raw:true, cellDates:true, defval:null});
     let i = 0;
     while(i < grid.length){
@@ -1308,7 +1324,7 @@ function openStoreModal(id){
 function closeModal(){ document.getElementById('overlay').classList.remove('open'); }
 document.getElementById('overlay').addEventListener('click', e=>{ if(e.target.id==='overlay') closeModal(); });
 
-/* ---------- 매출 데이터 입력 (포스별 붙여넣기) ---------- */
+/* ---------- 매출 데이터 입력 ---------- */
 function renderPosTabs(){
   document.getElementById('posTabs').innerHTML = ACCOUNT_LIST.map(p=>
     `<button data-pos="${p}" class="${p===state.entryPos?'active':''}">${p} <span style="opacity:.6">(${storesForAccount(p).length})</span></button>`
@@ -1343,8 +1359,11 @@ function renderEntry(){
     }).join('')}</tbody>`;
   attachPasteHandler(grid);
   attachNameValidation(grid, schema, account);
-  setupColumnResize(grid, 'entry-'+schemaKey);
-  attachAutoFitOnType(grid, 'entry-'+schemaKey);
+  // ★ 렌더 후 다음 프레임에 리사이즈 세팅 (레이아웃 확정 후 측정)
+  requestAnimationFrame(()=>{
+    setupColumnResize(grid, 'entry-'+schemaKey);
+    attachAutoFitOnType(grid, 'entry-'+schemaKey);
+  });
 }
 
 function attachNameValidation(grid, schema, account){
@@ -1396,7 +1415,6 @@ function attachPasteHandler(grid){
   });
 }
 
-// 포스 화면에 찍히는 이름이 우리 지점명과 다른 경우 여기에 등록하세요.
 const STORE_ALIASES = {
   '얼얼하이 청주성안점': '얼얼하이(성안점)',
   '얼얼하이 청주 성안점': '얼얼하이(성안점)',
@@ -1462,7 +1480,6 @@ function showToast(msg){
   setTimeout(()=>t.classList.remove('show'), 2400);
 }
 
-/* ---------- 시계 ---------- */
 function tickClock(){
   const d = new Date(); const days=['일','월','화','수','목','금','토'];
   document.getElementById('clock').textContent =
@@ -1517,8 +1534,10 @@ function renderAdmin(){
         }).join('')}
         <td><button class="btn ghost small admin-del" data-id="${s.id}">삭제</button></td>
       </tr>`).join('')}</tbody>`;
-  setupColumnResize(grid, 'admin');
-  attachAutoFitOnType(grid, 'admin');
+  requestAnimationFrame(()=>{
+    setupColumnResize(grid, 'admin');
+    attachAutoFitOnType(grid, 'admin');
+  });
   document.querySelectorAll('.admin-del').forEach(b=>b.addEventListener('click', ()=>{
     const id = +b.dataset.id;
     const store = STORES.find(s=>s.id===id);
@@ -1588,7 +1607,7 @@ document.getElementById('adminSaveBtn').addEventListener('click', ()=>{
   renderAll();
 });
 
-/* ---------- 마감장표 업로드(월별 보관) ---------- */
+/* ---------- 마감장표 업로드 ---------- */
 function loadArchives(){
   const raw = localStorage.getItem('yfp_archives');
   if(raw){ try{ return JSON.parse(raw); }catch(e){} }
@@ -1652,7 +1671,6 @@ document.getElementById('archiveUploadBtn').addEventListener('click', async ()=>
   const original = btn.textContent; btn.textContent = '업로드 중…';
   try{
     const buf = await file.arrayBuffer();
-    // [수정 3] cellDates:true 로 워크북 자체를 파싱 (파서 레벨에서 날짜 셀을 Date로 변환)
     const wb = XLSX.read(buf, { type:'array', cellDates:true });
     const parsed = parseArchiveWorkbook(wb);
     const brandCount = Object.keys(parsed.brands).length;
