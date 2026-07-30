@@ -364,10 +364,11 @@
     </section>
     <section class="view" id="view-admin">
       <div class="card" style="margin-bottom:16px;">
-        <div style="font-size:12.5px;color:var(--muted)">지점 기본정보·계약정보를 등록/수정하는 화면이에요. 여기서 바꾼 지역·로열티 등은 매출장표·마감장표·매장별현황에 바로 반영돼요.</div>
+        <div style="font-size:12.5px;color:var(--muted)">지점 기본정보·계약정보를 등록/수정하는 화면이에요. 여기서 바꾼 지역·로열티 등은 매출장표·마감장표·매장별현황에 바로 반영돼요. 매장명·브랜드를 포함한 모든 항목을 직접 고칠 수 있고, 새 지점 추가/삭제도 이 화면에서 하면 다른 모든 메뉴(매출 데이터 입력 포함)에 자동으로 반영돼요.</div>
       </div>
       <div class="toolbar">
         <input type="text" id="adminSearch" placeholder="지점명 검색…" style="min-width:200px;">
+        <button class="btn small" id="adminAddBtn">+ 새 지점 추가</button>
       </div>
       <div class="grid-scroll" style="max-height:66vh;">
         <table class="grid-table" id="adminGrid"></table>

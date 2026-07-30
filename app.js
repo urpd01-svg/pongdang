@@ -43,20 +43,38 @@ function loadStoreOverrides(){
 function saveStoreOverrides(o){ localStorage.setItem('yfp_store_overrides', JSON.stringify(o)); }
 let STORE_OVERRIDES = loadStoreOverrides();
 
-const STORES = RAW_STORES.map(([brand,name,region,pos,royalty,royaltyFixed],i)=>{
-  const fullName = `${brand}(${name})`;
-  const base = {
-    id:i, brand, name:fullName, short:name, region, pos,
-    type:'가맹점', owner:'', bizNo:'', address:'',
-    area: 20 + Math.round(Math.random()*70),
-    rent: 150 + Math.round(Math.random()*350),
-    royalty, royaltyFixed: royaltyFixed || null,
-    opened: OPENED_DATES[fullName] || `20${20+(i%6)}-0${1+(i%9)%9}-1${(i%9)+1}`,
-  };
-  return STORE_OVERRIDES[fullName] ? {...base, ...STORE_OVERRIDES[fullName]} : base;
-});
+const STORES_KEY = 'yfp_stores_v1';
+function buildInitialStores(){
+  return RAW_STORES.map(([brand,name,region,pos,royalty,royaltyFixed],i)=>{
+    const fullName = `${brand}(${name})`;
+    const base = {
+      id:i, brand, name:fullName, short:name, region, pos,
+      type:'가맹점', owner:'', bizNo:'', address:'',
+      area: 20 + Math.round(Math.random()*70),
+      rent: 150 + Math.round(Math.random()*350),
+      royalty, royaltyFixed: royaltyFixed || null,
+      opened: OPENED_DATES[fullName] || `20${20+(i%6)}-0${1+(i%9)%9}-1${(i%9)+1}`,
+    };
+    return STORE_OVERRIDES[fullName] ? {...base, ...STORE_OVERRIDES[fullName]} : base;
+  });
+}
+// 지점 목록을 localStorage에서 직접 읽고 쓴다 (처음 한 번만 RAW_STORES+기존 수정값으로 초기화).
+// 이렇게 해야 화면에서 지점을 추가/삭제하거나 항목을 고쳐도 새로고침 후에도 그대로 남는다.
+function loadStores(){
+  const raw = localStorage.getItem(STORES_KEY);
+  if(raw){ try{ return JSON.parse(raw); }catch(e){} }
+  const built = buildInitialStores();
+  localStorage.setItem(STORES_KEY, JSON.stringify(built));
+  return built;
+}
+function saveStores(list){ localStorage.setItem(STORES_KEY, JSON.stringify(list)); }
+const STORES = loadStores();
+function nextStoreId(){ return STORES.reduce((m,s)=>Math.max(m,s.id), -1) + 1; }
 
 const BRANDS = ['퐁당','유림대패','려원장어','얼얼하이'];
+// 마감장표 엑셀에 브랜드명이 다르게 적혀 있는 경우의 별칭 (예: 얼얼하이 -> 마라꼬치로 표기 변경).
+// 값(오른쪽)은 반드시 BRANDS 배열 안에 있는 이름이어야 함.
+const BRAND_ALIASES = { '마라꼬치':'얼얼하이' };
 const BRAND_COLORS = { '퐁당':'#2B6CB0', '유림대패':'#2F9E5C', '려원장어':'#D98B2B', '얼얼하이':'#B0323F' };
 const BRAND_COLOR_LIST = BRANDS.map(b=>BRAND_COLORS[b]);
 const PERIODS = ['당월누적','전일','토요일','전월','전년동월'];
@@ -569,6 +587,13 @@ function activeNoticeLabel(){
 }
 
 /* ---------- 업로드된 엑셀을 "공지용 마감장표"와 같은 양식으로 렌더링 ---------- */
+// 실시간 화면은 지점명을 "율량점"처럼 짧게 보여주는데(브랜드는 위 브랜드칩으로 이미 표시),
+// 업로드한 엑셀의 지점명은 "퐁당(율량점)"처럼 브랜드가 붙어있는 경우가 많아서 형식을 맞춰줌.
+function displayStoreName(fullName){
+  const s = cellText(fullName);
+  const m = s.match(/\(([^()]+)\)\s*$/);
+  return m ? m[1] : s;
+}
 function renderArchiveBrandBlock(brand, dateStr, rows, showSortLabel){
   if(!rows.length) return '';
   const sums = rows.reduce((a,r)=>({
@@ -605,7 +630,7 @@ function renderArchiveBrandBlock(brand, dateStr, rows, showSortLabel){
       <tbody>
         ${rows.map((r,i)=>`
         <tr>
-          <td>${i+1}</td><td class="txt">${r.region||'-'}</td><td class="txt${r.type==='직영점'?' td-direct':''}">${r.name}</td><td class="txt${r.type==='직영점'?' td-direct':''}">${r.opened||'-'}</td>
+          <td>${i+1}</td><td class="txt">${r.region||'-'}</td><td class="txt${r.type==='직영점'?' td-direct':''}">${displayStoreName(r.name)}</td><td class="txt${r.type==='직영점'?' td-direct':''}">${r.opened||'-'}</td>
           <td>${won(r.prevDay)}</td><td>${won(r.receipts)}</td><td>${won(r.unit)}</td>
           <td class="hl-cur">${won(r.curSales)}</td><td class="hl-proj">${won(r.proj)}</td><td>${won(r.dayAvg)}</td>
           <td>${won(r.prevMonth)}</td><td>${deltaSpan(r.momP)}</td>
@@ -629,7 +654,7 @@ function renderArchiveRoyaltyBlock(brand, dateStr, rows){
   const body = rows.map((r,i)=>{
     sumCur+=r.cur||0; sumProj+=r.proj||0; sumRoyCur+=r.royCur||0; sumRoyProj+=r.royProj||0;
     return `<tr>
-      <td>${i+1}</td><td class="txt">${r.region||'-'}</td><td class="txt${r.type==='직영점'?' td-direct':''}">${r.name}</td><td class="txt${r.type==='직영점'?' td-direct':''}">${r.opened||'-'}</td>
+      <td>${i+1}</td><td class="txt">${r.region||'-'}</td><td class="txt${r.type==='직영점'?' td-direct':''}">${displayStoreName(r.name)}</td><td class="txt${r.type==='직영점'?' td-direct':''}">${r.opened||'-'}</td>
       <td>${won(r.cur)}</td><td>${won(r.proj)}</td><td>${r.royaltyDisplay||'-'}</td>
       <td class="hl-cur">${won(r.royCur)}</td><td class="hl-proj">${won(r.royProj)}</td>
     </tr>`;
@@ -709,6 +734,8 @@ function parseArchiveWorkbook(wb){
           const text = (grid[i-back]||[]).map(cellText).join(' ');
           const hit = BRANDS.find(b=>text.includes(b));
           if(hit){ currentBrand = hit; break; }
+          const aliasHit = Object.keys(BRAND_ALIASES).find(a=>text.includes(a));
+          if(aliasHit){ currentBrand = BRAND_ALIASES[aliasHit]; break; }
         }
         const isRoyalty = map.royaltyPct!=null;
         const rows = [];
@@ -1103,20 +1130,21 @@ tickClock(); setInterval(tickClock, 1000*30);
 /* ---------- 전체 렌더 ---------- */
 /* ---------- 가맹점 정보 관리 ---------- */
 const ADMIN_FIELDS = [
-  ['region','지역','text'], ['type','가맹점/직영점','select'], ['owner','대표자명','text'],
+  ['brand','브랜드','select'], ['region','지역','text'], ['type','가맹점/직영점','select'],
+  ['pos','사용 포스','select'], ['owner','대표자명','text'],
   ['bizNo','사업자번호','text'], ['address','소재지 주소','text'],
-  ['royaltyPct','로열티(%)','number'], ['opened','사업개시일','text'],
-  ['area','평수','number'], ['rent','월 임대료(만원)','number'],
+  ['royaltyPct','로열티(%)','number'], ['royaltyFixed','정액 로열티(원)','number'],
+  ['opened','사업개시일','text'], ['area','평수','number'], ['rent','월 임대료(만원)','number'],
 ];
 let adminQuery = '';
 function renderAdmin(){
   const list = STORES.filter(s=>!adminQuery || s.name.includes(adminQuery));
   const grid = document.getElementById('adminGrid');
   grid.innerHTML = `
-    <thead><tr><th>매장명</th>${ADMIN_FIELDS.map(f=>`<th>${f[1]}</th>`).join('')}</tr></thead>
+    <thead><tr><th>매장명</th>${ADMIN_FIELDS.map(f=>`<th>${f[1]}</th>`).join('')}<th>관리</th></tr></thead>
     <tbody>${list.map(s=>`
-      <tr data-store="${s.name}">
-        <td class="fixed">${s.name}</td>
+      <tr data-id="${s.id}">
+        <td><input type="text" data-field="short" value="${s.short}" style="text-align:left;font-weight:600;min-width:110px;"></td>
         ${ADMIN_FIELDS.map(([key,label,type])=>{
           if(key==='type'){
             return `<td><select data-field="type" style="width:100%;height:100%;border:none;padding:6px 8px;">
@@ -1124,38 +1152,96 @@ function renderAdmin(){
               <option value="직영점" ${s.type==='직영점'?'selected':''}>직영점</option>
             </select></td>`;
           }
+          if(key==='brand'){
+            return `<td><select data-field="brand" style="width:100%;height:100%;border:none;padding:6px 8px;">
+              ${BRANDS.map(b=>`<option value="${b}" ${s.brand===b?'selected':''}>${b}</option>`).join('')}
+            </select></td>`;
+          }
+          if(key==='pos'){
+            return `<td><select data-field="pos" style="width:100%;height:100%;border:none;padding:6px 8px;">
+              ${POS_LIST.map(p=>`<option value="${p}" ${s.pos===p?'selected':''}>${p}</option>`).join('')}
+            </select></td>`;
+          }
           if(key==='royaltyPct'){
-            const v = s.royaltyFixed ? '' : (s.royalty ? +(s.royalty*100).toFixed(2) : '');
-            return `<td><input type="number" step="0.1" data-field="royaltyPct" value="${v}" placeholder="${s.royaltyFixed?'정액:'+s.royaltyFixed:''}"></td>`;
+            const v = s.royalty ? +(s.royalty*100).toFixed(2) : '';
+            return `<td><input type="number" step="0.1" data-field="royaltyPct" value="${v}" placeholder="정률(%)"></td>`;
+          }
+          if(key==='royaltyFixed'){
+            return `<td><input type="number" data-field="royaltyFixed" value="${s.royaltyFixed ?? ''}" placeholder="정액이면 입력"></td>`;
           }
           const val = s[key] ?? '';
           const isText = type==='text';
           return `<td><input type="${type}" data-field="${key}" value="${val}" style="${isText?'text-align:left;':''}"></td>`;
         }).join('')}
+        <td><button class="btn ghost small admin-del" data-id="${s.id}">삭제</button></td>
       </tr>`).join('')}</tbody>`;
+  document.querySelectorAll('.admin-del').forEach(b=>b.addEventListener('click', ()=>{
+    const id = +b.dataset.id;
+    const store = STORES.find(s=>s.id===id);
+    if(!store) return;
+    if(!confirm(`"${store.name}" 지점을 삭제할까요? 이 지점의 실시간 매출 입력 데이터도 함께 정리돼요. (지난 마감장표 업로드 기록은 그대로 남아요)`)) return;
+    const idx = STORES.findIndex(s=>s.id===id);
+    if(idx>=0) STORES.splice(idx,1);
+    PERIODS.forEach(p=>{ if(SALES[p]) delete SALES[p][store.name]; });
+    saveStores(STORES);
+    saveSales(SALES);
+    showToast(`"${store.name}" 지점을 삭제했어요.`);
+    renderAll();
+  }));
 }
 document.getElementById('adminSearch').addEventListener('input', e=>{ adminQuery=e.target.value.trim(); renderAdmin(); });
+document.getElementById('adminAddBtn').addEventListener('click', ()=>{
+  const brand = BRANDS[0];
+  let short = '새매장', n=1;
+  while(STORES.some(s=>s.name===`${brand}(${short})`)){ n++; short = `새매장${n}`; }
+  const id = nextStoreId();
+  STORES.push({
+    id, brand, name:`${brand}(${short})`, short, region:'', pos:POS_LIST[0],
+    type:'가맹점', owner:'', bizNo:'', address:'',
+    area:0, rent:0, royalty:0, royaltyFixed:null, opened:'',
+  });
+  saveStores(STORES);
+  adminQuery = '';
+  document.getElementById('adminSearch').value = '';
+  renderAdmin();
+  const row = document.querySelector(`#adminGrid tr[data-id="${id}"]`);
+  if(row){ row.scrollIntoView({block:'center'}); row.querySelector('[data-field="short"]').focus(); }
+  showToast('새 지점을 추가했어요 — 매장명·브랜드 등을 입력하고 "전체 저장"을 눌러주세요.');
+});
 document.getElementById('adminSaveBtn').addEventListener('click', ()=>{
   document.querySelectorAll('#adminGrid tbody tr').forEach(row=>{
-    const name = row.dataset.store;
-    const cur = STORE_OVERRIDES[name] || {};
-    const liveStore = STORES.find(s=>s.name===name);
+    const id = +row.dataset.id;
+    const liveStore = STORES.find(s=>s.id===id);
+    if(!liveStore) return;
+    const oldName = liveStore.name;
     row.querySelectorAll('[data-field]').forEach(el=>{
       const f = el.dataset.field;
       if(f==='royaltyPct'){
-        if(el.value!==''){ cur.royalty = +el.value/100; if(liveStore) liveStore.royalty = cur.royalty; }
+        liveStore.royalty = el.value==='' ? 0 : +el.value/100;
+      }else if(f==='royaltyFixed'){
+        liveStore.royaltyFixed = el.value==='' ? null : +el.value;
       }else if(el.tagName==='SELECT'){
-        cur[f] = el.value; if(liveStore) liveStore[f] = el.value;
+        liveStore[f] = el.value;
       }else if(el.type==='number'){
-        const v = el.value==='' ? undefined : +el.value;
-        cur[f] = v; if(liveStore && v!==undefined) liveStore[f] = v;
+        liveStore[f] = el.value==='' ? 0 : +el.value;
       }else{
-        cur[f] = el.value; if(liveStore) liveStore[f] = el.value;
+        liveStore[f] = el.value;
       }
     });
-    STORE_OVERRIDES[name] = cur;
+    liveStore.name = `${liveStore.brand}(${liveStore.short})`;
+    if(liveStore.name !== oldName){
+      // 브랜드나 매장명을 바꾸면 지점명이 달라지는데, 이미 입력해둔 매출 데이터는 옛 이름에
+      // 묶여 있으므로 그대로 두면 화면에서 안 보이게 됨 — 새 이름으로 옮겨준다.
+      PERIODS.forEach(p=>{
+        if(SALES[p] && SALES[p][oldName]!==undefined){
+          SALES[p][liveStore.name] = SALES[p][oldName];
+          delete SALES[p][oldName];
+        }
+      });
+    }
   });
-  saveStoreOverrides(STORE_OVERRIDES);
+  saveStores(STORES);
+  saveSales(SALES);
   showToast('가맹점 정보를 저장했어요 — 다른 화면에도 바로 반영돼요.');
   renderAll();
 });
@@ -1168,6 +1254,32 @@ function loadArchives(){
 }
 function saveArchives(a){ localStorage.setItem('yfp_archives', JSON.stringify(a)); }
 let ARCHIVES = loadArchives();
+
+// 업로드된 마감장표 중 가장 최근 월의 당월누적매출을 "전월매출"에 자동으로 채워넣는다.
+// 예: 7월 마감장표를 올리면, 8월에 실시간 화면을 볼 때 전월매출/전월대비가 자동으로 7월 수치를 씀.
+// (기존에 수기로 입력해둔 전월 데이터가 있어도, 마감장표에 있는 지점은 그 값으로 덮어씀 — 더 정확한 값이기 때문)
+function syncPrevMonthFromArchives(){
+  const months = Object.keys(ARCHIVES).sort();
+  const latest = months[months.length-1];
+  if(!latest) return;
+  const brands = ARCHIVES[latest].parsed?.brands || {};
+  let matched = 0;
+  Object.values(brands).forEach(rows=>{
+    rows.forEach(row=>{
+      const store = STORES.find(s=>s.name===row.name);
+      if(!store || row.curSales==null) return;
+      const schema = POS_SCHEMA[store.pos];
+      SALES['전월'][store.name] = {
+        ...(SALES['전월'][store.name]||{}),
+        [schema.sales]: row.curSales,
+        [schema.receipts]: row.receipts,
+      };
+      matched++;
+    });
+  });
+  if(matched) saveSales(SALES);
+}
+syncPrevMonthFromArchives();
 
 function renderArchiveList(){
   const months = Object.keys(ARCHIVES).sort().reverse();
@@ -1184,6 +1296,7 @@ function renderArchiveList(){
     if(!confirm(`${b.dataset.month} 마감장표를 삭제할까요?`)) return;
     delete ARCHIVES[b.dataset.month];
     saveArchives(ARCHIVES);
+    syncPrevMonthFromArchives();
     renderArchiveList();
     populateNoticeMonthSelect();
   }));
@@ -1209,6 +1322,7 @@ document.getElementById('archiveUploadBtn').addEventListener('click', async ()=>
     }
     ARCHIVES[month] = { fileName:file.name, uploadedAt:Date.now(), parsed };
     saveArchives(ARCHIVES);
+    syncPrevMonthFromArchives();
     renderArchiveList();
     populateNoticeMonthSelect();
     const skipNote = parsed.skipped.length
