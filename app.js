@@ -169,14 +169,17 @@ const pct = n => n==null || isNaN(n) ? '-' : (n>=0?'+':'') + (n*100).toFixed(1) 
 const royPct = r => !r ? '-' : (r*100).toFixed(1) + '%';
 
 /* =====================================================================
-   컬럼 크기 자동/수동 조정
-   ★ 수정본 핵심 아이디어
-   1) 저장은 폭(px)뿐 아니라 "사용자가 수동으로 조정했는지(manual flag)"까지 함께
-      저장 → 타이핑 자동확장이 수동 조정폭을 덮어쓰지 못하게 한다.
-   2) attachAutoFitOnType은 manual 컬럼은 절대 건드리지 않는다.
-   3) #entryGrid / #adminGrid 는 매 렌더마다 innerHTML이 새로 만들어지므로,
-      리사이즈 handle을 셀 안쪽 요소가 아니라 <th> 자체에 pointerdown 위임 방식으로 붙여서
-      셀 안의 input/select가 이벤트를 가로채는 문제도 함께 방지한다.
+   컬럼 리사이즈 (오버레이 방식)
+   ★ 이전 방식(handle을 <th> 안에 넣음)이 실패한 이유:
+     - .grid-table td { padding:0 } + input/select가 셀을 꽉 채워서
+       셀 안에 놓인 handle이 이벤트를 못 받는 상황이 계속 발생
+     - thead sticky, table-wrap overflow:auto 등이 겹쳐 클릭 영역이 잘림
+   ★ 새로운 방식:
+     - handle을 <th>가 아니라 테이블 부모(.table-wrap 또는 .grid-scroll)
+       위에 붙는 절대 위치 오버레이 <div>로 만든다.
+     - 오버레이는 pointer-events:none, 그 안에 handle만 pointer-events:auto
+     - 헤더 위치/폭이 바뀔 때마다 오버레이가 자기 위치를 갱신
+     - table 안의 어떤 요소도 오버레이를 가리지 못한다
 ===================================================================== */
 
 function resolveColSpans(theadRows){
@@ -190,7 +193,7 @@ function resolveColSpans(theadRows){
       while(occupied[rIdx].has(col)) col++;
       const colspan = cell.colSpan || 1;
       const rowspan = cell.rowSpan || 1;
-      cellCols.set(cell, { start: col, span: colspan });
+      cellCols.set(cell, { start: col, span: colspan, rowIdx: rIdx });
       for(let r=rIdx; r<rIdx+rowspan; r++){
         occupied[r] = occupied[r] || new Set();
         for(let c=col; c<col+colspan; c++) occupied[r].add(c);
@@ -224,8 +227,7 @@ function measureColumnWidths(table, cellCols, colCount){
   return measured;
 }
 
-/* 저장 포맷: { widths:{0:120, 1:80,...}, manual:{0:true} }
-   과거 포맷(폭 숫자만 저장) 도 호환한다. */
+/* 저장 포맷 (구 포맷 호환 유지) */
 function loadColState(key){
   try{
     const raw = localStorage.getItem('yfp_colw_'+key);
@@ -250,7 +252,6 @@ function textPixelWidth(text, font){
   return _measureCanvasCtx.measureText(text ?? '').width;
 }
 
-// 타이핑 자동확장: 수동으로 조정한 컬럼(manual=true)은 절대 건드리지 않는다.
 function attachAutoFitOnType(table, key){
   const colgroup = table.querySelector('colgroup');
   if(!colgroup) return;
@@ -263,7 +264,7 @@ function attachAutoFitOnType(table, key){
     const col = cols[colIdx];
     if(!col) return;
     const st = loadColState(key);
-    if(st.manual[colIdx]) return; // 수동 조정된 컬럼은 그대로 둔다
+    if(st.manual[colIdx]) return;
     const cs = getComputedStyle(el);
     const text = el.tagName==='SELECT' ? (el.options[el.selectedIndex]?.text || '') : el.value;
     const needed = Math.ceil(textPixelWidth(text, `${cs.fontSize} ${cs.fontFamily}`)) + 28;
@@ -272,6 +273,8 @@ function attachAutoFitOnType(table, key){
       col.style.width = needed + 'px';
       st.widths[colIdx] = needed;
       saveColState(key, st);
+      // 오버레이 위치도 갱신
+      if(table._resizeOverlay) table._resizeOverlay.reposition();
     }
   };
   table.querySelectorAll('tbody input, tbody select').forEach(el=>{
@@ -287,12 +290,63 @@ function getResizeGuide(){
   g.style.position = 'fixed';
   g.style.width = '2px';
   g.style.background = 'var(--blue)';
-  g.style.zIndex = '9999';
+  g.style.zIndex = '99999';
   g.style.display = 'none';
   g.style.pointerEvents = 'none';
   document.body.appendChild(g);
   _resizeGuide = g;
   return g;
+}
+
+// 오버레이용 CSS 한 번만 심는다
+function injectResizeCss(){
+  if(document.getElementById('resize-overlay-css')) return;
+  const st = document.createElement('style');
+  st.id = 'resize-overlay-css';
+  st.textContent = `
+    .col-resize-overlay{
+      position:absolute; top:0; left:0; width:100%; height:100%;
+      pointer-events:none; z-index:1000;
+    }
+    .col-resize-overlay .rz-handle{
+      position:absolute; top:0;
+      width:11px; height:0;
+      cursor:col-resize;
+      pointer-events:auto;
+      touch-action:none;
+      background:transparent;
+      transform:translateX(-5px);
+      z-index:1001;
+    }
+    .col-resize-overlay .rz-handle::before{
+      content:''; position:absolute; top:0; left:5px; width:1px; height:100%;
+      background:transparent; transition:background .1s;
+    }
+    .col-resize-overlay .rz-handle:hover::before,
+    .col-resize-overlay .rz-handle.active::before{
+      background:var(--blue);
+      box-shadow:0 0 0 1px rgba(43,76,140,.35);
+      width:2px;
+    }
+    body.col-resizing, body.col-resizing *{ cursor:col-resize !important; user-select:none !important; }
+  `;
+  document.head.appendChild(st);
+}
+injectResizeCss();
+
+// 어떤 컨테이너가 이 테이블의 "오버레이 부모"가 될지 결정한다.
+// 스크롤 컨테이너(.table-wrap, .grid-scroll)를 우선 선택하고, 없으면 테이블 부모.
+function findOverlayHost(table){
+  let el = table.parentElement;
+  while(el){
+    const cs = getComputedStyle(el);
+    if(el.classList.contains('table-wrap') || el.classList.contains('grid-scroll')) return el;
+    if(cs.overflowX === 'auto' || cs.overflowX === 'scroll') return el;
+    if(cs.overflowY === 'auto' || cs.overflowY === 'scroll') return el;
+    if(el.tagName==='BODY') break;
+    el = el.parentElement;
+  }
+  return table.parentElement;
 }
 
 function setupColumnResize(table, key){
@@ -301,12 +355,13 @@ function setupColumnResize(table, key){
   const { cellCols, colCount } = resolveColSpans(theadRows);
   if(!colCount) return;
 
-  // 측정 전에 반드시 auto로 되돌린다
+  // 측정 전에 auto로
   table.style.tableLayout = 'auto';
   const measured = measureColumnWidths(table, cellCols, colCount);
   const saved = loadColState(key);
   const widths = new Array(colCount).fill(0).map((_,i)=> saved.widths[i] || measured[i] || 60);
 
+  // colgroup 재생성
   const colgroup = document.createElement('colgroup');
   widths.forEach(w=>{
     const c = document.createElement('col');
@@ -319,21 +374,100 @@ function setupColumnResize(table, key){
   table.style.tableLayout = 'fixed';
   const cols = Array.from(colgroup.children);
 
+  // 오버레이를 host에 심는다
+  const host = findOverlayHost(table);
+  // host가 position:static 이면 offsetLeft/Top이 이상해지므로 relative로 승격
+  const hostCS = getComputedStyle(host);
+  if(hostCS.position === 'static') host.style.position = 'relative';
+
+  // 이전 오버레이 제거
+  if(table._resizeOverlay && table._resizeOverlay.el && table._resizeOverlay.el.parentNode){
+    table._resizeOverlay.el.parentNode.removeChild(table._resizeOverlay.el);
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'col-resize-overlay';
+  host.appendChild(overlay);
+
+  // 각 컬럼(rowspan=1인 leaf 헤더 셀 중 span=1 짜리)마다 handle 하나
+  // 여러 rowspan/colspan이 얽혀 있어도 결국 컬럼 오른쪽 경계 x좌표만 알면 되므로
+  // 각 컬럼별로 "leaf가 되는 셀"의 오른쪽 위치를 사용한다.
+  // leaf 셀 = span이 1이고 rowspan이 있어서 실제 컬럼 하나만 담당하는 셀들.
+  // 여기서는 그냥 각 컬럼 인덱스별로 "그 컬럼을 span=1로 담당하는 셀"을 찾아 hasLeaf 확인.
+  const leafRightByCol = new Array(colCount).fill(null);
+  const leafHeightByCol = new Array(colCount).fill(null);
+  const leafTopByCol = new Array(colCount).fill(null);
   cellCols.forEach(({start,span}, cell)=>{
     if(span!==1) return;
-    cell.classList.add('resizable-th');
-    if(getComputedStyle(cell).position === 'static') cell.style.position = 'relative';
-    const handle = document.createElement('span');
-    handle.className = 'col-resize-handle';
-    handle.title = '드래그해서 폭 조정';
-    handle.dataset.colIdx = String(start);
+    // 같은 컬럼에 여러 후보가 있을 수 있는데(rowspan/multi-row header),
+    // 가장 아래쪽(=제일 leaf) 셀을 우선한다.
+    const rect = cell.getBoundingClientRect();
+    leafRightByCol[start] = cell;
+  });
 
-    // pointerdown은 handle에서 받고, move/up은 document 레벨에 붙여
-    // handle 영역을 벗어나도 커서를 그대로 따라가게 한다.
-    handle.addEventListener('pointerdown', (e)=>{
+  const handles = [];
+  for(let c=0;c<colCount;c++){
+    if(!leafRightByCol[c]) continue;
+    const h = document.createElement('div');
+    h.className = 'rz-handle';
+    h.dataset.col = String(c);
+    h.title = '드래그해서 폭 조정';
+    overlay.appendChild(h);
+    handles.push({ el:h, colIdx:c, cell: leafRightByCol[c] });
+  }
+
+  function reposition(){
+    const hostRect = host.getBoundingClientRect();
+    // 스크롤이 있는 host라면 scrollLeft/scrollTop 만큼 보정
+    const scrollLeft = host.scrollLeft || 0;
+    const scrollTop = host.scrollTop || 0;
+    // 오버레이는 host 자체를 뒤덮으므로 위치 리셋
+    overlay.style.top = '0px';
+    overlay.style.left = '0px';
+    overlay.style.width = host.scrollWidth + 'px';
+    overlay.style.height = host.scrollHeight + 'px';
+
+    // 헤더 top / bottom 계산
+    const theadRect = table.tHead.getBoundingClientRect();
+    const headerTop = theadRect.top - hostRect.top + scrollTop;
+    const headerHeight = theadRect.height;
+
+    handles.forEach(({el, cell})=>{
+      const rect = cell.getBoundingClientRect();
+      const rightX = rect.right - hostRect.left + scrollLeft;
+      el.style.left = rightX + 'px';
+      el.style.top = headerTop + 'px';
+      el.style.height = headerHeight + 'px';
+    });
+  }
+
+  // ResizeObserver로 사이즈 바뀌면 자동 갱신
+  const ro = new ResizeObserver(()=>reposition());
+  ro.observe(table);
+  ro.observe(host);
+  // 스크롤/윈도우 리사이즈에도 갱신
+  const onScroll = ()=>reposition();
+  const onWinResize = ()=>reposition();
+  host.addEventListener('scroll', onScroll);
+  window.addEventListener('resize', onWinResize);
+
+  table._resizeOverlay = {
+    el: overlay, reposition,
+    destroy(){
+      ro.disconnect();
+      host.removeEventListener('scroll', onScroll);
+      window.removeEventListener('resize', onWinResize);
+      if(overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
+  };
+
+  // 리사이즈 인터랙션
+  handles.forEach(({el, colIdx})=>{
+    el.addEventListener('pointerdown', (e)=>{
       e.preventDefault(); e.stopPropagation();
+      el.setPointerCapture && el.setPointerCapture(e.pointerId);
       const startX = e.clientX;
-      const startW = widths[start];
+      const startW = widths[colIdx];
       let finalW = startW;
       const guide = getResizeGuide();
       const tableRect = table.getBoundingClientRect();
@@ -341,32 +475,37 @@ function setupColumnResize(table, key){
       guide.style.height = tableRect.height + 'px';
       guide.style.left = e.clientX + 'px';
       guide.style.display = 'block';
-      handle.classList.add('active');
+      el.classList.add('active');
       document.body.classList.add('col-resizing');
 
       const onMove = (ev)=>{
         finalW = Math.max(30, Math.round(startW + (ev.clientX-startX)));
         guide.style.left = ev.clientX + 'px';
-        cols[start].style.width = finalW + 'px';
+        cols[colIdx].style.width = finalW + 'px';
+        reposition();
       };
       const onUp = ()=>{
         document.removeEventListener('pointermove', onMove);
         document.removeEventListener('pointerup', onUp);
         document.removeEventListener('pointercancel', onUp);
         guide.style.display = 'none';
-        handle.classList.remove('active');
+        el.classList.remove('active');
         document.body.classList.remove('col-resizing');
-        widths[start] = finalW;
-        cols[start].style.width = finalW + 'px';
-        saveColWidth(key, start, finalW, true); // ★ manual=true 로 저장
+        widths[colIdx] = finalW;
+        cols[colIdx].style.width = finalW + 'px';
+        saveColWidth(key, colIdx, finalW, true);
+        reposition();
       };
       document.addEventListener('pointermove', onMove);
       document.addEventListener('pointerup', onUp);
       document.addEventListener('pointercancel', onUp);
     });
-    cell.appendChild(handle);
   });
-  return { cols, widths };
+
+  // 첫 위치 잡기 (다음 프레임에 한 번 더)
+  reposition();
+  requestAnimationFrame(reposition);
+  return { cols, widths, reposition };
 }
 
 // 공지용 마감장표: 여러 브랜드 표를 하나의 공용 컬럼 폭으로 정렬
@@ -380,6 +519,7 @@ function setupSharedColumnResize(tables, key){
     const measured = measureColumnWidths(t, info.cellCols, info.colCount);
     return { table:t, ...info, measured };
   }).filter(Boolean);
+  if(!perTable.length) return;
 
   const colCount = Math.max(...perTable.map(p=>p.colCount));
   const merged = new Array(colCount).fill(0);
@@ -405,34 +545,93 @@ function setupSharedColumnResize(tables, key){
     p.cols = Array.from(colgroup.children);
   });
 
+  // 각 테이블마다 자기 오버레이를 갖되, 모든 오버레이의 핸들은 같은 컬럼 인덱스를 공유한다.
+  const allOverlays = [];
   perTable.forEach(p=>{
+    const host = findOverlayHost(p.table);
+    if(getComputedStyle(host).position === 'static') host.style.position = 'relative';
+    if(p.table._resizeOverlay && p.table._resizeOverlay.el && p.table._resizeOverlay.el.parentNode){
+      p.table._resizeOverlay.el.parentNode.removeChild(p.table._resizeOverlay.el);
+    }
+    const overlay = document.createElement('div');
+    overlay.className = 'col-resize-overlay';
+    host.appendChild(overlay);
+
+    const leafByCol = new Array(colCount).fill(null);
     p.cellCols.forEach(({start,span}, cell)=>{
       if(span!==1) return;
-      cell.classList.add('resizable-th');
-      if(getComputedStyle(cell).position === 'static') cell.style.position = 'relative';
-      const handle = document.createElement('span');
-      handle.className = 'col-resize-handle';
-      handle.title = '드래그해서 폭 조정 (모든 브랜드 표에 함께 적용)';
+      leafByCol[start] = cell;
+    });
+    const handles = [];
+    for(let c=0;c<colCount;c++){
+      if(!leafByCol[c]) continue;
+      const h = document.createElement('div');
+      h.className = 'rz-handle';
+      h.dataset.col = String(c);
+      h.title = '드래그해서 폭 조정 (모든 브랜드 표에 함께 적용)';
+      overlay.appendChild(h);
+      handles.push({ el:h, colIdx:c, cell: leafByCol[c] });
+    }
 
-      handle.addEventListener('pointerdown', (e)=>{
+    function reposition(){
+      const hostRect = host.getBoundingClientRect();
+      const scrollLeft = host.scrollLeft || 0;
+      const scrollTop = host.scrollTop || 0;
+      overlay.style.top = '0px';
+      overlay.style.left = '0px';
+      overlay.style.width = host.scrollWidth + 'px';
+      overlay.style.height = host.scrollHeight + 'px';
+      const theadRect = p.table.tHead.getBoundingClientRect();
+      const headerTop = theadRect.top - hostRect.top + scrollTop;
+      const headerHeight = theadRect.height;
+      handles.forEach(({el, cell})=>{
+        const rect = cell.getBoundingClientRect();
+        const rightX = rect.right - hostRect.left + scrollLeft;
+        el.style.left = rightX + 'px';
+        el.style.top = headerTop + 'px';
+        el.style.height = headerHeight + 'px';
+      });
+    }
+    const ro = new ResizeObserver(()=>reposition());
+    ro.observe(p.table); ro.observe(host);
+    const onScroll = ()=>reposition();
+    const onWinResize = ()=>reposition();
+    host.addEventListener('scroll', onScroll);
+    window.addEventListener('resize', onWinResize);
+    p.table._resizeOverlay = {
+      el: overlay, reposition,
+      destroy(){ ro.disconnect(); host.removeEventListener('scroll', onScroll); window.removeEventListener('resize', onWinResize); if(overlay.parentNode) overlay.parentNode.removeChild(overlay); }
+    };
+    allOverlays.push({ table:p.table, cols:p.cols, handles, reposition });
+    reposition();
+    requestAnimationFrame(reposition);
+  });
+
+  // 모든 오버레이의 handle에 같은 로직 (드래그하면 모든 표 동시에 변한다)
+  allOverlays.forEach(({handles})=>{
+    handles.forEach(({el, colIdx})=>{
+      el.addEventListener('pointerdown', (e)=>{
         e.preventDefault(); e.stopPropagation();
+        el.setPointerCapture && el.setPointerCapture(e.pointerId);
         const startX = e.clientX;
-        const startW = widths[start];
+        const startW = widths[colIdx];
         let finalW = startW;
         const guide = getResizeGuide();
-        const tableRect = p.table.getBoundingClientRect();
-        guide.style.top = tableRect.top + 'px';
-        guide.style.height = tableRect.height + 'px';
+        const anyTable = allOverlays[0].table;
+        const tr = anyTable.getBoundingClientRect();
+        guide.style.top = tr.top + 'px';
+        guide.style.height = tr.height + 'px';
         guide.style.left = e.clientX + 'px';
         guide.style.display = 'block';
-        handle.classList.add('active');
+        el.classList.add('active');
         document.body.classList.add('col-resizing');
 
         const onMove = (ev)=>{
           finalW = Math.max(30, Math.round(startW + (ev.clientX-startX)));
           guide.style.left = ev.clientX + 'px';
-          perTable.forEach(pp=>{
-            if(pp.cols[start]) pp.cols[start].style.width = finalW + 'px';
+          allOverlays.forEach(o=>{
+            if(o.cols[colIdx]) o.cols[colIdx].style.width = finalW + 'px';
+            o.reposition();
           });
         };
         const onUp = ()=>{
@@ -440,67 +639,22 @@ function setupSharedColumnResize(tables, key){
           document.removeEventListener('pointerup', onUp);
           document.removeEventListener('pointercancel', onUp);
           guide.style.display = 'none';
-          handle.classList.remove('active');
+          el.classList.remove('active');
           document.body.classList.remove('col-resizing');
-          widths[start] = finalW;
-          perTable.forEach(pp=>{
-            if(pp.cols[start]) pp.cols[start].style.width = finalW + 'px';
+          widths[colIdx] = finalW;
+          allOverlays.forEach(o=>{
+            if(o.cols[colIdx]) o.cols[colIdx].style.width = finalW + 'px';
+            o.reposition();
           });
-          saveColWidth(key, start, finalW, true);
+          saveColWidth(key, colIdx, finalW, true);
         };
         document.addEventListener('pointermove', onMove);
         document.addEventListener('pointerup', onUp);
         document.addEventListener('pointercancel', onUp);
       });
-      cell.appendChild(handle);
     });
   });
 }
-
-// 페이지 로드시 한 번, 리사이즈에 필요한 CSS를 강제로 재보정한다.
-// index.html의 CSS 룰(th.resizable-th의 position/overflow)이 상황에 따라
-// sticky/overflow-hidden에 가려 handle이 잘리는 경우가 있어서, JS로 우선순위
-// 높은 인라인 스타일을 다시 심어준다.
-function injectResizeCss(){
-  if(document.getElementById('resize-css-fix')) return;
-  const st = document.createElement('style');
-  st.id = 'resize-css-fix';
-  st.textContent = `
-    /* handle을 셀 오른쪽 안쪽으로 이동하고 z-index를 크게 올려,
-       sticky 헤더/rounded overflow 컨테이너에 잘리지 않도록 함 */
-    th.resizable-th{ position:relative !important; overflow:visible !important; }
-    .col-resize-handle{
-      position:absolute !important;
-      top:0 !important;
-      right:0 !important;
-      width:10px !important;
-      height:100% !important;
-      cursor:col-resize !important;
-      z-index:50 !important;
-      touch-action:none !important;
-      background:transparent;
-    }
-    .col-resize-handle:hover, .col-resize-handle.active{
-      background:rgba(255,255,255,.35) !important;
-    }
-    .grid-table .col-resize-handle:hover, .grid-table .col-resize-handle.active,
-    table.notice .col-resize-handle:hover, table.notice .col-resize-handle.active{
-      background:rgba(43,76,140,.30) !important;
-    }
-    /* 셀 안의 input/select가 오른쪽 끝까지 꽉 채우면 handle 히트영역이 좁아지므로,
-       오른쪽에 10px 여백을 강제로 준다 */
-    .grid-table td > input, .grid-table td > select{
-      max-width: calc(100% - 10px) !important;
-    }
-    /* .table-wrap의 overflow-x:auto 는 유지하되, 사이드로 절대 위치한 handle이
-       thead sticky 위에 오도록 z-index를 확실히 확보한다 */
-    .grid-table thead th{ z-index:5; }
-    .grid-table thead th.resizable-th .col-resize-handle{ z-index:60 !important; }
-    body.col-resizing, body.col-resizing *{ cursor:col-resize !important; user-select:none !important; }
-  `;
-  document.head.appendChild(st);
-}
-injectResizeCss();
 
 function metricsFor(storeName, period){
   const store = STORES.find(s=>s.name===storeName);
@@ -681,7 +835,7 @@ function renderReportTable(){
       <td class="num" style="font-weight:700">${won(r.m.sales)}</td><td class="num">${won(r.m.dayAvg)}</td>
       <td class="num">${won(r.proj)}</td>
       <td>${r.mom==null?'<span class="pill flat">-</span>':`<span class="pill ${r.mom>=0?'up':'down'}">${r.mom>=0?'▲':'▼'} ${pct(r.mom)}</span>`}</td></tr>`).join('');
-  setupColumnResize(document.getElementById('reportTable'), 'report');
+  requestAnimationFrame(()=>setupColumnResize(document.getElementById('reportTable'), 'report'));
 }
 
 let miniCharts = {};
@@ -867,7 +1021,7 @@ function renderNotice(){
       if(rows && rows.length) royaltyHtml += renderArchiveRoyaltyBlock(brand, dateStr, rows);
     });
     document.getElementById('noticeRoyaltyContainer').innerHTML = royaltyHtml || `<div class="card">로열티현황 데이터가 없어요.</div>`;
-    setupNoticeTablesResize();
+    requestAnimationFrame(setupNoticeTablesResize);
     return;
   }
 
@@ -880,7 +1034,7 @@ function renderNotice(){
   const ROYALTY_BRANDS = BRANDS.filter(b=>b!=='유림대패' && b!=='려원장어');
   ROYALTY_BRANDS.forEach(brand=>{ royaltyHtml += renderNoticeRoyaltyBlock(brand, dateStr); });
   document.getElementById('noticeRoyaltyContainer').innerHTML = royaltyHtml;
-  setupNoticeTablesResize();
+  requestAnimationFrame(setupNoticeTablesResize);
 }
 
 function setupNoticeTablesResize(){
@@ -1183,7 +1337,7 @@ function renderAnalysis(){
   STORES.forEach(s=>{ brandTotals[s.brand] += metricsFor(s.name,'당월누적')?.sales||0; });
 
   if(typeof Chart === 'undefined'){
-    document.getElementById('brandPie').replaceWith(Object.assign(document.createElement('div'),{style:'padding:30px;text-align:center;color:var(--muted);font-size:12.5px',textContent:'차트 라이브러리(Chart.js)를 불러오지 못했어요. 인터넷 연결을 확인해주세요.'}));
+    document.getElementById('brandPie').replaceWith(Object.assign(document.createElement('div'),{style:'padding:30px;text-align:center;color:var(--muted);font-size:12.5px',textContent:'차트 라이브러리(Chart.js)를 불러오지 못했어요.'}));
     document.getElementById('compareBar').replaceWith(Object.assign(document.createElement('div'),{style:'padding:30px;text-align:center;color:var(--muted);font-size:12.5px',textContent:'차트 라이브러리(Chart.js)를 불러오지 못했어요.'}));
     return renderRankTables();
   }
@@ -1345,6 +1499,8 @@ function renderEntry(){
   const schema = POS_SCHEMA[schemaKey];
   const rows = storesForAccount(account);
   const grid = document.getElementById('entryGrid');
+  // 이전 오버레이 정리
+  if(grid._resizeOverlay) grid._resizeOverlay.destroy();
   grid.innerHTML = `
     <thead><tr>${schema.fields.map(f=>`<th>${f}</th>`).join('')}</tr></thead>
     <tbody>${rows.map(s=>{
@@ -1359,7 +1515,6 @@ function renderEntry(){
     }).join('')}</tbody>`;
   attachPasteHandler(grid);
   attachNameValidation(grid, schema, account);
-  // ★ 렌더 후 다음 프레임에 리사이즈 세팅 (레이아웃 확정 후 측정)
   requestAnimationFrame(()=>{
     setupColumnResize(grid, 'entry-'+schemaKey);
     attachAutoFitOnType(grid, 'entry-'+schemaKey);
@@ -1499,6 +1654,7 @@ let adminQuery = '';
 function renderAdmin(){
   const list = STORES.filter(s=>!adminQuery || s.name.includes(adminQuery));
   const grid = document.getElementById('adminGrid');
+  if(grid._resizeOverlay) grid._resizeOverlay.destroy();
   grid.innerHTML = `
     <thead><tr><th>매장명</th>${ADMIN_FIELDS.map(f=>`<th>${f[1]}</th>`).join('')}<th>관리</th></tr></thead>
     <tbody>${list.map(s=>`
@@ -1542,7 +1698,7 @@ function renderAdmin(){
     const id = +b.dataset.id;
     const store = STORES.find(s=>s.id===id);
     if(!store) return;
-    if(!confirm(`"${store.name}" 지점을 삭제할까요? 이 지점의 실시간 매출 입력 데이터도 함께 정리돼요. (지난 마감장표 업로드 기록은 그대로 남아요)`)) return;
+    if(!confirm(`"${store.name}" 지점을 삭제할까요?`)) return;
     const idx = STORES.findIndex(s=>s.id===id);
     if(idx>=0) STORES.splice(idx,1);
     PERIODS.forEach(p=>{ if(SALES[p]) delete SALES[p][store.name]; });
@@ -1569,7 +1725,7 @@ document.getElementById('adminAddBtn').addEventListener('click', ()=>{
   renderAdmin();
   const row = document.querySelector(`#adminGrid tr[data-id="${id}"]`);
   if(row){ row.scrollIntoView({block:'center'}); row.querySelector('[data-field="short"]').focus(); }
-  showToast('새 지점을 추가했어요 — 매장명·브랜드 등을 입력하고 "전체 저장"을 눌러주세요.');
+  showToast('새 지점을 추가했어요.');
 });
 document.getElementById('adminSaveBtn').addEventListener('click', ()=>{
   document.querySelectorAll('#adminGrid tbody tr').forEach(row=>{
@@ -1603,7 +1759,7 @@ document.getElementById('adminSaveBtn').addEventListener('click', ()=>{
   });
   saveStores(STORES);
   saveSales(SALES);
-  showToast('가맹점 정보를 저장했어요 — 다른 화면에도 바로 반영돼요.');
+  showToast('가맹점 정보를 저장했어요.');
   renderAll();
 });
 
@@ -1650,7 +1806,7 @@ function renderArchiveList(){
       <td><button class="btn ghost small archive-del" data-month="${m}">삭제</button></td>
     </tr>`;
   }).join('') : `<tr><td colspan="4" class="txt" style="color:var(--muted)">아직 업로드된 마감장표가 없어요.</td></tr>`;
-  setupColumnResize(document.getElementById('archiveListTable'), 'archiveList');
+  requestAnimationFrame(()=>setupColumnResize(document.getElementById('archiveListTable'), 'archiveList'));
   document.querySelectorAll('.archive-del').forEach(b=>b.addEventListener('click', ()=>{
     if(!confirm(`${b.dataset.month} 마감장표를 삭제할까요?`)) return;
     delete ARCHIVES[b.dataset.month];
@@ -1666,7 +1822,7 @@ document.getElementById('archiveUploadBtn').addEventListener('click', async ()=>
   const file = document.getElementById('archiveFile').files[0];
   if(!month){ showToast('먼저 해당 월을 선택해주세요.'); return; }
   if(!file){ showToast('업로드할 엑셀 파일을 선택해주세요.'); return; }
-  if(typeof XLSX === 'undefined'){ showToast('엑셀 처리 라이브러리를 불러오지 못했어요. 인터넷 연결을 확인해주세요.'); return; }
+  if(typeof XLSX === 'undefined'){ showToast('엑셀 처리 라이브러리를 불러오지 못했어요.'); return; }
   const btn = document.getElementById('archiveUploadBtn');
   const original = btn.textContent; btn.textContent = '업로드 중…';
   try{
@@ -1675,7 +1831,7 @@ document.getElementById('archiveUploadBtn').addEventListener('click', async ()=>
     const parsed = parseArchiveWorkbook(wb);
     const brandCount = Object.keys(parsed.brands).length;
     if(!brandCount){
-      showToast('마감장표 형식을 인식하지 못했어요 — 지역/지점명/당월누적매출 등 컬럼명을 확인해주세요.');
+      showToast('마감장표 형식을 인식하지 못했어요.');
       btn.textContent = original;
       return;
     }
@@ -1685,13 +1841,13 @@ document.getElementById('archiveUploadBtn').addEventListener('click', async ()=>
     renderArchiveList();
     populateNoticeMonthSelect();
     const skipNote = parsed.skipped.length
-      ? ` — 다만 "${parsed.skipped[0].sampleName}" 쪽 블록은 브랜드명을 못 찾아 제외됐어요${parsed.skipped.length>1?` (외 ${parsed.skipped.length-1}건)`:''}. 지점 관리에 등록된 브랜드명과 엑셀 상 브랜드명이 다른지 확인해주세요.`
+      ? ` — "${parsed.skipped[0].sampleName}" 쪽 블록은 브랜드명을 못 찾아 제외됐어요${parsed.skipped.length>1?` (외 ${parsed.skipped.length-1}건)`:''}.`
       : '';
     showToast(`${month} 마감장표를 저장했어요 (${brandCount}개 브랜드 인식됨).${skipNote}`);
     document.getElementById('archiveFile').value = '';
   }catch(e){
     console.error(e);
-    showToast('파일을 읽는 데 실패했어요. 엑셀(.xlsx) 파일이 맞는지 확인해주세요.');
+    showToast('파일을 읽는 데 실패했어요.');
   }
   btn.textContent = original;
 });
