@@ -660,6 +660,10 @@ const COL_ALIASES = {
   royaltyPct:['로열티율'], royCur:['당월누적기준'], royProj:['예상마감기준'],
 };
 function cellText(v){ return v==null ? '' : String(v).trim(); }
+// 헤더 비교 전용: 셀 안 줄바꿈·공백을 다 지운 텍스트. 인쇄용으로 만든 헤더는
+// "당월\n누적매출"처럼 칸 안에 줄바꿈이 들어있는 경우가 많은데, 그대로 비교하면
+// COL_ALIASES의 '당월누적매출'과 안 걸려서 헤더 자체를 통째로 못 찾게 됨.
+function normText(v){ return cellText(v).replace(/\s+/g, ''); }
 function toNum(v){
   if(v==null || v==='' || v==='-') return null;
   if(typeof v==='number') return v;
@@ -670,11 +674,11 @@ function matchHeaderRow(row){
   const map = {};
   let momSeen = false;
   row.forEach((cellRaw, c)=>{
-    const cell = cellText(cellRaw);
+    const cell = normText(cellRaw);
     if(!cell) return;
     for(const [field, aliases] of Object.entries(COL_ALIASES)){
       if(map[field]!=null) continue;
-      if(aliases.some(a=>cell.includes(a))) map[field] = c;
+      if(aliases.some(a=>cell.includes(normText(a)))) map[field] = c;
     }
     if(cell.includes('증감률')){
       if(!momSeen){ map.momPct = c; momSeen = true; } else { map.yoyPct = c; }
@@ -686,18 +690,21 @@ function matchHeaderRow(row){
 }
 
 function parseArchiveWorkbook(wb){
-  const result = { brands:{}, royalty:{} };
+  const result = { brands:{}, royalty:{}, skipped:[] };
   const sheetNames = wb.SheetNames.filter(n=>n.includes('마감장표'));
   const targets = sheetNames.length ? sheetNames : wb.SheetNames;
   targets.forEach(sn=>{
     const grid = XLSX.utils.sheet_to_json(wb.Sheets[sn], {header:1, raw:true, defval:null});
-    let currentBrand = null;
     let i = 0;
     while(i < grid.length){
       const row = grid[i] || [];
       const map = matchHeaderRow(row);
       if(map){
-        // 브랜드명: 이 헤더 위 1~2줄 안에서 브랜드 이름이 들어있는 셀을 찾는다
+        // 브랜드명: 이 헤더 위 1~3줄 안에서 브랜드 이름이 들어있는 셀을 찾는다.
+        // currentBrand는 블록마다 새로 찾아야 함 — while문 밖에서 한 번만 선언하면
+        // 이번 블록에서 못 찾았을 때 이전 블록의 브랜드명이 남아있어서, 서로 다른
+        // 브랜드의 데이터가 그 이전 브랜드 이름으로 잘못 합쳐져버림.
+        let currentBrand = null;
         for(let back=1; back<=3 && i-back>=0; back++){
           const text = (grid[i-back]||[]).map(cellText).join(' ');
           const hit = BRANDS.find(b=>text.includes(b));
@@ -738,6 +745,11 @@ function parseArchiveWorkbook(wb){
         if(currentBrand && rows.length){
           if(isRoyalty) result.royalty[currentBrand] = rows;
           else result.brands[currentBrand] = rows;
+        }else if(rows.length){
+          // 헤더(지점명+당월누적매출 등)는 인식했지만 BRANDS 목록 어디에도 없는
+          // 브랜드명이라 currentBrand를 못 찾은 경우 — 조용히 버리지 말고 남겨서
+          // 업로드 후 안내 메시지로 알려준다.
+          result.skipped.push({ row: i+1, sampleName: rows[0].name });
         }
         i = r;
       }else{
@@ -1164,7 +1176,7 @@ function renderArchiveList(){
     return `<tr>
       <td class="txt" style="font-weight:600">${m}</td>
       <td class="txt">${a.fileName}</td>
-      <td class="txt" style="font-size:11.5px;color:var(--muted)">${new Date(a.uploadedAt).toLocaleString('ko-KR')} · 브랜드 ${Object.keys(a.parsed?.brands||{}).length}개 인식</td>
+      <td class="txt" style="font-size:11.5px;color:var(--muted)">${new Date(a.uploadedAt).toLocaleString('ko-KR')} · 브랜드 ${Object.keys(a.parsed?.brands||{}).length}개 인식${(a.parsed?.skipped||[]).length ? ` · <span style="color:var(--up);font-weight:600">인식 실패 ${a.parsed.skipped.length}건</span>` : ''}</td>
       <td><button class="btn ghost small archive-del" data-month="${m}">삭제</button></td>
     </tr>`;
   }).join('') : `<tr><td colspan="4" class="txt" style="color:var(--muted)">아직 업로드된 마감장표가 없어요.</td></tr>`;
@@ -1199,7 +1211,10 @@ document.getElementById('archiveUploadBtn').addEventListener('click', async ()=>
     saveArchives(ARCHIVES);
     renderArchiveList();
     populateNoticeMonthSelect();
-    showToast(`${month} 마감장표를 저장했어요 (${brandCount}개 브랜드 인식됨).`);
+    const skipNote = parsed.skipped.length
+      ? ` — 다만 "${parsed.skipped[0].sampleName}" 쪽 블록은 브랜드명을 못 찾아 제외됐어요${parsed.skipped.length>1?` (외 ${parsed.skipped.length-1}건)`:''}. 지점 관리에 등록된 브랜드명과 엑셀 상 브랜드명이 다른지 확인해주세요.`
+      : '';
+    showToast(`${month} 마감장표를 저장했어요 (${brandCount}개 브랜드 인식됨).${skipNote}`);
     document.getElementById('archiveFile').value = '';
   }catch(e){
     showToast('파일을 읽는 데 실패했어요. 엑셀(.xlsx) 파일이 맞는지 확인해주세요.');
