@@ -289,6 +289,11 @@ function setupColumnResize(table, key){
   const theadRows = Array.from(table.tHead.rows);
   const { cellCols, colCount } = resolveColSpans(theadRows);
   if(!colCount) return;
+  // 측정 전에 반드시 auto로 되돌려둔다 — CSS 기본값이 fixed이거나(예: table.notice),
+  // 이전 렌더에서 이 표 엘리먼트에 남아있는 인라인 fixed 상태(예: 계속 재사용되는
+  // #entryGrid/#adminGrid)가 있으면, "글씨 크기에 맞는 폭"이 아니라 그 fixed 상태에서
+  // 뭉개진 폭을 측정하게 되어 컬럼이 다 비슷비슷한 폭으로 굳어버리는 문제가 있었다.
+  table.style.tableLayout = 'auto';
   const measured = measureColumnWidths(table, cellCols, colCount);
   const saved = loadColWidths(key);
   // col 엘리먼트는 브라우저에 따라 getBoundingClientRect가 불안정할 수 있어서,
@@ -314,6 +319,8 @@ function setupColumnResize(table, key){
     const handle = document.createElement('span');
     handle.className = 'col-resize-handle';
     handle.title = '드래그해서 폭 조정';
+    // 표 셀 안에서는 height:100%가 브라우저에 따라 불안정할 수 있어서 실제 픽셀 높이로 고정
+    handle.style.height = Math.ceil(cell.getBoundingClientRect().height) + 'px';
     handle.addEventListener('pointerdown', (e)=>{
       e.preventDefault(); e.stopPropagation();
       handle.setPointerCapture(e.pointerId);
