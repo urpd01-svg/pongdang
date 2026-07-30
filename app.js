@@ -268,8 +268,10 @@ function attachAutoFitOnType(table, key){
     if(el.tagName==='SELECT') el.addEventListener('change', ()=>grow(el));
   });
 }
-// table: 대상 <table> 엘리먼트(현재 화면에 보이는 상태여야 폭 측정이 정확함)
-// key: 같은 종류의 표끼리 크기를 공유·저장하기 위한 식별자 (예: 'notice-sales')
+
+// [수정 1] 컬럼 리사이즈: pointer 이벤트를 handle이 아닌 document에 붙여야
+// 커서가 handle 밖으로 나가도 이벤트가 끊기지 않고 따라온다.
+// 또한 드래그 중에도 실시간으로 폭을 반영해 "커서가 안 따라오는" 느낌을 없앤다.
 let _resizeGuide = null;
 function getResizeGuide(){
   if(_resizeGuide && document.body.contains(_resizeGuide)) return _resizeGuide;
@@ -319,17 +321,13 @@ function setupColumnResize(table, key){
     const handle = document.createElement('span');
     handle.className = 'col-resize-handle';
     handle.title = '드래그해서 폭 조정';
-    // 표 셀 안에서는 height:100%가 브라우저에 따라 불안정할 수 있어서 실제 픽셀 높이로 고정
     handle.style.height = Math.ceil(cell.getBoundingClientRect().height) + 'px';
+
     handle.addEventListener('pointerdown', (e)=>{
       e.preventDefault(); e.stopPropagation();
-      handle.setPointerCapture(e.pointerId);
       const startX = e.clientX;
       const startW = widths[start];
       let finalW = startW;
-      // 드래그 중엔 표를 매번 다시 그리지 않고, 커서를 따라가는 얇은 안내선만 움직인다
-      // (표를 계속 리플로우하면 무겁게 느껴지고, 표 전체 폭이 고정이라 다른 컬럼이 실시간으로
-      // 줄어드는 것처럼 보이는 원인도 됐음 — 엑셀처럼 놓을 때 한 번만 적용되게 함)
       const guide = getResizeGuide();
       const tableRect = table.getBoundingClientRect();
       guide.style.top = tableRect.top + 'px';
@@ -338,13 +336,19 @@ function setupColumnResize(table, key){
       guide.style.display = 'block';
       handle.classList.add('active');
       document.body.classList.add('col-resizing');
+
+      // ★ 핵심 수정: pointermove/up을 document에 붙여, 커서가 얇은 handle 영역을
+      // 벗어나도 계속 커서를 따라가게 한다. 또한 드래그 중에도 실시간으로 col 폭을
+      // 반영해서 사용자가 즉시 결과를 볼 수 있게 한다.
       const onMove = (ev)=>{
         finalW = Math.max(30, Math.round(startW + (ev.clientX-startX)));
         guide.style.left = ev.clientX + 'px';
+        cols[start].style.width = finalW + 'px';
       };
       const onUp = ()=>{
-        handle.removeEventListener('pointermove', onMove);
-        handle.removeEventListener('pointerup', onUp);
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        document.removeEventListener('pointercancel', onUp);
         guide.style.display = 'none';
         handle.classList.remove('active');
         document.body.classList.remove('col-resizing');
@@ -352,10 +356,106 @@ function setupColumnResize(table, key){
         cols[start].style.width = finalW + 'px';
         saveColWidth(key, start, finalW);
       };
-      handle.addEventListener('pointermove', onMove);
-      handle.addEventListener('pointerup', onUp);
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+      document.addEventListener('pointercancel', onUp);
     });
     cell.appendChild(handle);
+  });
+  return { cols, widths };
+}
+
+// [수정 4] 공지용 마감장표에서 여러 브랜드 표의 컬럼 폭을 하나로 맞춰준다.
+// 자동 정렬 + 각 표에서 직접 조정하면 모든 표에 동시 적용되도록.
+function setupSharedColumnResize(tables, key){
+  if(!tables.length) return;
+  // 1) 각 표별로 측정된 폭을 뽑아 컬럼별 최댓값을 찾는다 — 이렇게 하면 브랜드마다
+  //    "당월누적매출" 같은 컬럼의 최대 텍스트 폭에 맞춰 모든 표가 자동 정렬된다.
+  const perTable = tables.map(t=>{
+    if(!t.tHead || !t.tBodies[0]) return null;
+    t.style.tableLayout = 'auto';
+    const theadRows = Array.from(t.tHead.rows);
+    const info = resolveColSpans(theadRows);
+    const measured = measureColumnWidths(t, info.cellCols, info.colCount);
+    return { table:t, ...info, measured };
+  }).filter(Boolean);
+
+  const colCount = Math.max(...perTable.map(p=>p.colCount));
+  const merged = new Array(colCount).fill(0);
+  perTable.forEach(p=>{
+    for(let i=0;i<p.colCount;i++){
+      if(p.measured[i] > merged[i]) merged[i] = p.measured[i];
+    }
+  });
+  const saved = loadColWidths(key);
+  const widths = new Array(colCount).fill(0).map((_,i)=> saved[i] || merged[i] || 60);
+
+  // 2) 모든 표에 같은 colgroup을 심는다
+  perTable.forEach(p=>{
+    const colgroup = document.createElement('colgroup');
+    widths.forEach(w=>{
+      const c = document.createElement('col');
+      c.style.width = w+'px';
+      colgroup.appendChild(c);
+    });
+    const old = p.table.querySelector('colgroup');
+    if(old) old.remove();
+    p.table.insertBefore(colgroup, p.table.firstChild);
+    p.table.style.tableLayout = 'fixed';
+    p.cols = Array.from(colgroup.children);
+  });
+
+  // 3) 리사이즈 핸들: 하나의 컬럼을 조정하면 모든 표의 같은 컬럼이 함께 변한다
+  perTable.forEach(p=>{
+    p.cellCols.forEach(({start,span}, cell)=>{
+      if(span!==1) return;
+      cell.classList.add('resizable-th');
+      if(getComputedStyle(cell).position === 'static') cell.style.position = 'relative';
+      const handle = document.createElement('span');
+      handle.className = 'col-resize-handle';
+      handle.title = '드래그해서 폭 조정 (모든 브랜드 표에 함께 적용)';
+      handle.style.height = Math.ceil(cell.getBoundingClientRect().height) + 'px';
+
+      handle.addEventListener('pointerdown', (e)=>{
+        e.preventDefault(); e.stopPropagation();
+        const startX = e.clientX;
+        const startW = widths[start];
+        let finalW = startW;
+        const guide = getResizeGuide();
+        const tableRect = p.table.getBoundingClientRect();
+        guide.style.top = tableRect.top + 'px';
+        guide.style.height = tableRect.height + 'px';
+        guide.style.left = e.clientX + 'px';
+        guide.style.display = 'block';
+        handle.classList.add('active');
+        document.body.classList.add('col-resizing');
+
+        const onMove = (ev)=>{
+          finalW = Math.max(30, Math.round(startW + (ev.clientX-startX)));
+          guide.style.left = ev.clientX + 'px';
+          perTable.forEach(pp=>{
+            if(pp.cols[start]) pp.cols[start].style.width = finalW + 'px';
+          });
+        };
+        const onUp = ()=>{
+          document.removeEventListener('pointermove', onMove);
+          document.removeEventListener('pointerup', onUp);
+          document.removeEventListener('pointercancel', onUp);
+          guide.style.display = 'none';
+          handle.classList.remove('active');
+          document.body.classList.remove('col-resizing');
+          widths[start] = finalW;
+          perTable.forEach(pp=>{
+            if(pp.cols[start]) pp.cols[start].style.width = finalW + 'px';
+          });
+          saveColWidth(key, start, finalW);
+        };
+        document.addEventListener('pointermove', onMove);
+        document.addEventListener('pointerup', onUp);
+        document.addEventListener('pointercancel', onUp);
+      });
+      cell.appendChild(handle);
+    });
   });
 }
 
@@ -491,7 +591,6 @@ function bindNavDrag(){
       btn.parentNode.insertBefore(dragEl, before ? btn : btn.nextSibling);
     });
   });
-  // 카테고리 라벨 위로 드롭하면 그 카테고리 맨 앞으로 이동
   nav.querySelectorAll('.nav-label').forEach(label=>{
     label.addEventListener('dragover', (e)=>{
       e.preventDefault();
@@ -547,7 +646,6 @@ function renderMiniDashboard(list, period){
   if(typeof Chart === 'undefined') return;
   const miniOpts = { plugins:{legend:{display:false}}, responsive:true, maintainAspectRatio:false };
 
-  // ① 브랜드 비중 (필터 무관하게 전체 기준)
   const brandTotals = {}; BRANDS.forEach(b=>brandTotals[b]=0);
   STORES.forEach(s=>{ brandTotals[s.brand] += metricsFor(s.name,period)?.sales||0; });
   if(miniCharts.brand) miniCharts.brand.destroy();
@@ -557,7 +655,6 @@ function renderMiniDashboard(list, period){
     options:{ ...miniOpts, plugins:{legend:{position:'bottom', labels:{boxWidth:8, font:{size:9}}}} }
   });
 
-  // ② TOP5 매장 (현재 필터 기준)
   const ranked = list.map(s=>({name:s.short, sales:metricsFor(s.name,period)?.sales||0})).sort((a,b)=>b.sales-a.sales).slice(0,5);
   if(miniCharts.top) miniCharts.top.destroy();
   miniCharts.top = new Chart(document.getElementById('miniTopChart'), {
@@ -566,7 +663,6 @@ function renderMiniDashboard(list, period){
     options:{ ...miniOpts, indexAxis:'y', scales:{ x:{ ticks:{ display:false }, grid:{display:false} }, y:{ ticks:{font:{size:9}}, grid:{display:false} } } }
   });
 
-  // ③ 기간별 합계매출 비교
   const periodTotals = PERIODS.map(p=> list.reduce((a,s)=>a+(metricsFor(s.name,p)?.sales||0),0));
   if(miniCharts.trend) miniCharts.trend.destroy();
   miniCharts.trend = new Chart(document.getElementById('miniTrendChart'), {
@@ -633,7 +729,7 @@ function renderNoticeBrandBlock(brand, dateStr, showSortLabel){
       <div class="lft"><span class="date-chip">${dateStr} 마감 기준</span><span class="brand-chip">${brand}</span></div>
       ${showSortLabel ? '<div class="hint">매출 내림차순 정렬</div>' : ''}
     </div>
-    <table class="notice">
+    <table class="notice" data-brand="${brand}">
       <thead>
         <tr>
           <th rowspan="2">순위</th><th rowspan="2">지역</th><th rowspan="2">지점명</th><th rowspan="2">사업개시일</th>
@@ -686,7 +782,7 @@ function renderNoticeRoyaltyBlock(brand, dateStr){
   return `
   <div class="notice-block">
     <div class="notice-head"><div class="lft"><span class="date-chip">${dateStr} 마감 기준</span><span class="brand-chip">${brand} · 로열티현황 (개설순)</span></div></div>
-    <table class="notice">
+    <table class="notice" data-brand="${brand}">
       <thead><tr><th>개설순</th><th>지역</th><th>지점명</th><th>사업개시일</th><th>당월누적</th><th>예상마감</th><th>로열티율</th><th>당월누적기준</th><th>예상마감기준</th></tr></thead>
       <tbody>${body}
         <tr class="total"><td colspan="4" class="txt">계</td><td>${won(sumCur)}</td><td>${won(sumProj)}</td><td>-</td><td class="hl-cur">${won(sumRoyCur)}</td><td class="hl-proj">${won(sumRoyProj)}</td></tr>
@@ -716,11 +812,18 @@ function renderNotice(){
     }
     const dateStr = monthSel.value + ' 업로드본';
     let salesHtml = '';
-    Object.entries(a.parsed.brands).forEach(([brand, rows], i)=>{ salesHtml += renderArchiveBrandBlock(brand, dateStr, rows, i===0); });
+    // [수정 4] 브랜드 순서를 항상 BRANDS 순서(퐁당→유림대패→려원장어→얼얼하이)로 고정
+    BRANDS.forEach((brand, i)=>{
+      const rows = a.parsed.brands[brand];
+      if(rows && rows.length) salesHtml += renderArchiveBrandBlock(brand, dateStr, rows, i===0);
+    });
     document.getElementById('noticeSalesContainer').innerHTML = salesHtml || `<div class="card">매출현황 데이터를 인식하지 못했어요.</div>`;
 
     let royaltyHtml = '';
-    Object.entries(a.parsed.royalty).forEach(([brand, rows])=>{ royaltyHtml += renderArchiveRoyaltyBlock(brand, dateStr, rows); });
+    BRANDS.forEach(brand=>{
+      const rows = a.parsed.royalty[brand];
+      if(rows && rows.length) royaltyHtml += renderArchiveRoyaltyBlock(brand, dateStr, rows);
+    });
     document.getElementById('noticeRoyaltyContainer').innerHTML = royaltyHtml || `<div class="card">로열티현황 데이터가 없어요.</div>`;
     setupNoticeTablesResize();
     return;
@@ -737,9 +840,13 @@ function renderNotice(){
   document.getElementById('noticeRoyaltyContainer').innerHTML = royaltyHtml;
   setupNoticeTablesResize();
 }
+
+// [수정 4] 공지용 마감장표의 여러 브랜드 표를 하나의 공용 컬럼 폭으로 정렬
 function setupNoticeTablesResize(){
-  document.querySelectorAll('#noticeSalesContainer table.notice').forEach(t=>setupColumnResize(t,'notice-sales'));
-  document.querySelectorAll('#noticeRoyaltyContainer table.notice').forEach(t=>setupColumnResize(t,'notice-royalty'));
+  const salesTables = Array.from(document.querySelectorAll('#noticeSalesContainer table.notice'));
+  const royaltyTables = Array.from(document.querySelectorAll('#noticeRoyaltyContainer table.notice'));
+  if(salesTables.length) setupSharedColumnResize(salesTables, 'notice-sales-shared');
+  if(royaltyTables.length) setupSharedColumnResize(royaltyTables, 'notice-royalty-shared');
 }
 
 document.querySelectorAll('#noticeSubTab button').forEach(b=>b.addEventListener('click', ()=>{
@@ -761,8 +868,6 @@ function activeNoticeLabel(){
 }
 
 /* ---------- 업로드된 엑셀을 "공지용 마감장표"와 같은 양식으로 렌더링 ---------- */
-// 실시간 화면은 지점명을 "율량점"처럼 짧게 보여주는데(브랜드는 위 브랜드칩으로 이미 표시),
-// 업로드한 엑셀의 지점명은 "퐁당(율량점)"처럼 브랜드가 붙어있는 경우가 많아서 형식을 맞춰줌.
 function displayStoreName(fullName){
   const s = cellText(fullName);
   const m = s.match(/\(([^()]+)\)\s*$/);
@@ -783,7 +888,7 @@ function renderArchiveBrandBlock(brand, dateStr, rows, showSortLabel){
       <div class="lft"><span class="date-chip">${dateStr} 마감 기준</span><span class="brand-chip">${brand}</span></div>
       ${showSortLabel ? '<div class="hint">매출 내림차순 정렬</div>' : ''}
     </div>
-    <table class="notice">
+    <table class="notice" data-brand="${brand}">
       <thead>
         <tr>
           <th rowspan="2">순위</th><th rowspan="2">지역</th><th rowspan="2">지점명</th><th rowspan="2">사업개시일</th>
@@ -830,7 +935,7 @@ function renderArchiveRoyaltyBlock(brand, dateStr, rows){
   return `
   <div class="notice-block">
     <div class="notice-head"><div class="lft"><span class="date-chip">${dateStr} 마감 기준</span><span class="brand-chip">${brand} · 로열티현황</span></div></div>
-    <table class="notice">
+    <table class="notice" data-brand="${brand}">
       <thead><tr><th>순위</th><th>지역</th><th>지점명</th><th>사업개시일</th><th>당월누적</th><th>예상마감</th><th>로열티율</th><th>당월누적기준</th><th>예상마감기준</th></tr></thead>
       <tbody>${body}
         <tr class="total"><td colspan="4" class="txt">계</td><td>${won(sumCur)}</td><td>${won(sumProj)}</td><td>-</td><td class="hl-cur">${won(sumRoyCur)}</td><td class="hl-proj">${won(sumRoyProj)}</td></tr>
@@ -841,16 +946,18 @@ function renderArchiveRoyaltyBlock(brand, dateStr, rows){
 
 // 헤더 텍스트로 컬럼을 찾기 위한 별칭표
 const COL_ALIASES = {
-  region:['지역'], name:['지점명','매장명'], opened:['사업개시일','개시일'],
+  region:['지역'], name:['지점명','매장명'], opened:['사업개시일','개시일','개점일','오픈일'],
   prevDay:['전일매출'], receipts:['영수건수','누적영수건수'], unit:['영수단가'],
   curSales:['당월누적매출','당월누적'], proj:['당월예상마감','예상마감'], dayAvg:['일평균매출','일평균'],
   prevMonth:['전월매출'], prevYear:['전년동월매출'],
   royaltyPct:['로열티율'], royCur:['당월누적기준'], royProj:['예상마감기준'],
+  type:['가맹점/직영점','구분','유형'],
 };
-function cellText(v){ return v==null ? '' : String(v).trim(); }
-// 헤더 비교 전용: 셀 안 줄바꿈·공백을 다 지운 텍스트. 인쇄용으로 만든 헤더는
-// "당월\n누적매출"처럼 칸 안에 줄바꿈이 들어있는 경우가 많은데, 그대로 비교하면
-// COL_ALIASES의 '당월누적매출'과 안 걸려서 헤더 자체를 통째로 못 찾게 됨.
+function cellText(v){
+  if(v==null) return '';
+  if(v instanceof Date) return formatDateCell(v);
+  return String(v).trim();
+}
 function normText(v){ return cellText(v).replace(/\s+/g, ''); }
 function toNum(v){
   if(v==null || v==='' || v==='-') return null;
@@ -858,6 +965,53 @@ function toNum(v){
   const n = parseFloat(String(v).replace(/[^0-9.\-]/g,''));
   return isNaN(n) ? null : n;
 }
+
+// [수정 3] 사업개시일 셀 정규화
+// 엑셀 셀은 (1) 문자열 "2024-08-15" / "2024.8.15" / "2024/08/15" / "2024년 8월 15일"
+// (2) JS Date 객체 (XLSX가 cellDates:true나 raw:true+시리얼 변환으로 만들어냄)
+// (3) 순수 숫자(엑셀 날짜 시리얼 — 1900-01-01 기준 일수) 로 들어올 수 있다.
+// 이 함수는 어떤 형태든 "YYYY-MM-DD" 문자열로 통일해준다.
+function formatDateCell(v){
+  if(v==null || v==='') return '';
+  const pad = (n)=> String(n).padStart(2,'0');
+  const asISO = (d)=>{
+    if(!(d instanceof Date) || isNaN(d.getTime())) return '';
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  };
+  // (1) Date 객체
+  if(v instanceof Date) return asISO(v);
+  // (2) 숫자 — 엑셀 시리얼 (1900-01-01 기준, 1900년 leap-bug 보정)
+  if(typeof v === 'number' && isFinite(v) && v > 20000 && v < 80000){
+    // 25569 = 1970-01-01 의 엑셀 시리얼
+    const ms = (v - 25569) * 86400 * 1000;
+    return asISO(new Date(ms));
+  }
+  // (3) 문자열
+  const s = String(v).trim();
+  if(!s) return '';
+  // YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD
+  let m = s.match(/^(\d{4})[.\-\/년\s]+(\d{1,2})[.\-\/월\s]+(\d{1,2})/);
+  if(m) return `${m[1]}-${pad(+m[2])}-${pad(+m[3])}`;
+  // YY.MM.DD (예: 24.08.15)
+  m = s.match(/^(\d{2})[.\-\/](\d{1,2})[.\-\/](\d{1,2})/);
+  if(m){
+    const year = +m[1] < 70 ? 2000 + +m[1] : 1900 + +m[1];
+    return `${year}-${pad(+m[2])}-${pad(+m[3])}`;
+  }
+  // 순수 숫자 문자열 (엑셀 시리얼이 문자열로 들어온 경우)
+  if(/^\d+(\.\d+)?$/.test(s)){
+    const n = parseFloat(s);
+    if(n > 20000 && n < 80000){
+      const ms = (n - 25569) * 86400 * 1000;
+      return asISO(new Date(ms));
+    }
+  }
+  // 그 외에는 Date.parse 시도, 실패하면 원문 그대로
+  const d = new Date(s);
+  if(!isNaN(d.getTime())) return asISO(d);
+  return s;
+}
+
 function matchHeaderRow(row){
   const map = {};
   let momSeen = false;
@@ -872,9 +1026,42 @@ function matchHeaderRow(row){
       if(!momSeen){ map.momPct = c; momSeen = true; } else { map.yoyPct = c; }
     }
   });
-  // 마감장표 판별: 지점명 + (당월누적매출 또는 당월누적) 컬럼이 있어야 유효한 헤더로 인정
   const hasSales = map.name!=null && (map.curSales!=null || map.royaltyPct!=null);
   return hasSales ? map : null;
+}
+
+// [수정 2] 업로드된 엑셀 rows에 STORES의 type(직영점/가맹점) 정보를 채워넣는다.
+// 이렇게 해야 renderArchiveBrandBlock의 `r.type==='직영점'` 판정이 동작해서
+// 지점명·사업개시일 셀에 초록 배경(.td-direct)이 정상적으로 입혀진다.
+function enrichRowWithStoreInfo(row){
+  // 엑셀에 원문 그대로 남을 수 있는 필드들을 정규화
+  row.opened = formatDateCell(row.opened);
+  // 지점명 → 등록된 STORE 찾기
+  const nameStr = cellText(row.name);
+  if(!nameStr) return row;
+  const normPasted = normalizeName(nameStr);
+  // 1) 완전 일치 (fullName 또는 short)
+  let hit = STORES.find(s=> s.name===nameStr || s.short===nameStr);
+  // 2) 정규화 후 포함 관계
+  if(!hit){
+    hit = STORES.find(s=>{
+      const fn = normalizeName(s.name);
+      const sn = normalizeName(s.short);
+      return fn===normPasted || sn===normPasted || fn.includes(normPasted) || normPasted.includes(sn);
+    });
+  }
+  if(hit){
+    // 엑셀에 type 컬럼이 있으면 그것을 우선, 없으면 STORES의 type 적용
+    if(!row.type || (row.type!=='가맹점' && row.type!=='직영점')){
+      row.type = hit.type || '가맹점';
+    }
+    // 사업개시일이 비어있으면 STORES 값으로 채움
+    if(!row.opened) row.opened = hit.opened || '';
+    if(!row.region) row.region = hit.region || '';
+  }else{
+    if(!row.type) row.type = '가맹점';
+  }
+  return row;
 }
 
 function parseArchiveWorkbook(wb){
@@ -882,16 +1069,14 @@ function parseArchiveWorkbook(wb){
   const sheetNames = wb.SheetNames.filter(n=>n.includes('마감장표'));
   const targets = sheetNames.length ? sheetNames : wb.SheetNames;
   targets.forEach(sn=>{
-    const grid = XLSX.utils.sheet_to_json(wb.Sheets[sn], {header:1, raw:true, defval:null});
+    // [수정 3] cellDates:true → 엑셀의 날짜 셀을 JS Date 객체로 받아온다
+    //           defval:'' → 빈 셀도 컬럼 위치가 어긋나지 않도록 유지
+    const grid = XLSX.utils.sheet_to_json(wb.Sheets[sn], {header:1, raw:true, cellDates:true, defval:null});
     let i = 0;
     while(i < grid.length){
       const row = grid[i] || [];
       const map = matchHeaderRow(row);
       if(map){
-        // 브랜드명: 이 헤더 위 1~3줄 안에서 브랜드 이름이 들어있는 셀을 찾는다.
-        // currentBrand는 블록마다 새로 찾아야 함 — while문 밖에서 한 번만 선언하면
-        // 이번 블록에서 못 찾았을 때 이전 블록의 브랜드명이 남아있어서, 서로 다른
-        // 브랜드의 데이터가 그 이전 브랜드 이름으로 잘못 합쳐져버림.
         let currentBrand = null;
         for(let back=1; back<=3 && i-back>=0; back++){
           const text = (grid[i-back]||[]).map(cellText).join(' ');
@@ -907,28 +1092,30 @@ function parseArchiveWorkbook(wb){
           const dataRow = grid[r] || [];
           const nameVal = cellText(dataRow[map.name]);
           if(!nameVal || nameVal==='합계' || nameVal==='계'){ break; }
-          if(matchHeaderRow(dataRow)) break; // 다음 블록 헤더를 만나면 중단
+          if(matchHeaderRow(dataRow)) break;
           if(isRoyalty){
-            rows.push({
+            rows.push(enrichRowWithStoreInfo({
               name:nameVal, region: map.region!=null?cellText(dataRow[map.region]):'',
-              opened: map.opened!=null?cellText(dataRow[map.opened]):'',
+              opened: map.opened!=null?dataRow[map.opened]:'',
+              type: map.type!=null?cellText(dataRow[map.type]):'',
               cur: toNum(dataRow[map.curSales]), proj: toNum(dataRow[map.proj]),
               royaltyDisplay: map.royaltyPct!=null ? cellText(dataRow[map.royaltyPct]) : '-',
               royCur: toNum(dataRow[map.royCur]), royProj: toNum(dataRow[map.royProj]),
-            });
+            }));
           }else{
             const prevMonth = toNum(dataRow[map.prevMonth]);
             const prevYear = toNum(dataRow[map.prevYear]);
             const proj = toNum(dataRow[map.proj]);
-            rows.push({
+            rows.push(enrichRowWithStoreInfo({
               name:nameVal, region: map.region!=null?cellText(dataRow[map.region]):'',
-              opened: map.opened!=null?cellText(dataRow[map.opened]):'',
+              opened: map.opened!=null?dataRow[map.opened]:'',
+              type: map.type!=null?cellText(dataRow[map.type]):'',
               prevDay: toNum(dataRow[map.prevDay]), receipts: toNum(dataRow[map.receipts]),
               unit: toNum(dataRow[map.unit]), curSales: toNum(dataRow[map.curSales]),
               proj, dayAvg: toNum(dataRow[map.dayAvg]),
-              prevMonth, momP: (prevMonth && proj!=null) ? (proj-prevMonth)/prevMonth : toNum(dataRow[map.momPct])/100,
-              prevYear, yoyP: (prevYear && proj!=null) ? (proj-prevYear)/prevYear : toNum(dataRow[map.yoyPct])/100,
-            });
+              prevMonth, momP: (prevMonth && proj!=null) ? (proj-prevMonth)/prevMonth : (toNum(dataRow[map.momPct])!=null ? toNum(dataRow[map.momPct])/100 : null),
+              prevYear, yoyP: (prevYear && proj!=null) ? (proj-prevYear)/prevYear : (toNum(dataRow[map.yoyPct])!=null ? toNum(dataRow[map.yoyPct])/100 : null),
+            }));
           }
           r++;
         }
@@ -936,9 +1123,6 @@ function parseArchiveWorkbook(wb){
           if(isRoyalty) result.royalty[currentBrand] = rows;
           else result.brands[currentBrand] = rows;
         }else if(rows.length){
-          // 헤더(지점명+당월누적매출 등)는 인식했지만 BRANDS 목록 어디에도 없는
-          // 브랜드명이라 currentBrand를 못 찾은 경우 — 조용히 버리지 말고 남겨서
-          // 업로드 후 안내 메시지로 알려준다.
           result.skipped.push({ row: i+1, sampleName: rows[0].name });
         }
         i = r;
@@ -962,7 +1146,6 @@ async function copyNoticeAsImage(){
         await navigator.clipboard.write([ new ClipboardItem({ 'image/png': blob }) ]);
         showToast(`${activeNoticeLabel()} 이미지를 복사했어요 — 카카오톡 대화창에 Ctrl+V로 붙여넣으세요.`);
       }catch(err){
-        // 클립보드 API를 지원하지 않는 브라우저 → 다운로드로 대체
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url; a.download = `${activeNoticeLabel()}_${document.getElementById('noticeDate').value}.png`;
@@ -1066,7 +1249,7 @@ function renderStores(){
     </div>`;
   }).join('');
   document.querySelectorAll('.store-card').forEach(el=>el.addEventListener('click', (e)=>{
-    if(e.target.closest('.detail-btn')) return; // 버튼 클릭은 아래 핸들러가 처리
+    if(e.target.closest('.detail-btn')) return;
     openStoreModal(+el.dataset.id);
   }));
   document.querySelectorAll('.detail-btn').forEach(el=>el.addEventListener('click', (e)=>{
@@ -1176,7 +1359,6 @@ function attachNameValidation(grid, schema, account){
     check(inp);
     inp.addEventListener('input', ()=>check(inp));
     inp.addEventListener('paste', ()=>setTimeout(()=>{
-      // paste 이벤트로 여러 줄이 채워질 수 있으니 전체 매장명 칸을 다시 검사
       nameInputs.forEach(check);
     }, 0));
   });
@@ -1189,7 +1371,7 @@ function attachPasteHandler(grid){
   inputs.forEach((inp, idx)=>{
     inp.addEventListener('paste', (e)=>{
       const text = (e.clipboardData || window.clipboardData).getData('text');
-      if(!text.includes('\t') && !text.includes('\n')) return; // 단일 값 붙여넣기는 기본 동작
+      if(!text.includes('\t') && !text.includes('\n')) return;
       e.preventDefault();
       const rows = text.replace(/\r/g,'').split('\n').filter(r=>r.length);
       const startRow = Math.floor(idx / cols);
@@ -1215,7 +1397,6 @@ function attachPasteHandler(grid){
 }
 
 // 포스 화면에 찍히는 이름이 우리 지점명과 다른 경우 여기에 등록하세요.
-// 왼쪽(포스에서 붙여넣는 실제 텍스트) -> 오른쪽(우리 시스템의 정식 지점명)
 const STORE_ALIASES = {
   '얼얼하이 청주성안점': '얼얼하이(성안점)',
   '얼얼하이 청주 성안점': '얼얼하이(성안점)',
@@ -1229,7 +1410,6 @@ function matchStore(pastedName, account){
   const candidates = storesForAccount(account);
   const trimmed = pastedName.trim();
 
-  // 1) 별칭표 먼저 확인 (공백 유무 상관없이)
   const aliasKey = Object.keys(STORE_ALIASES).find(k => normalizeName(k) === normalizeName(trimmed));
   if(aliasKey){
     const canonical = STORE_ALIASES[aliasKey];
@@ -1237,11 +1417,9 @@ function matchStore(pastedName, account){
     if(hit) return hit;
   }
 
-  // 2) 정확히 일치
   let hit = candidates.find(s=>s.name === trimmed);
   if(hit) return hit;
 
-  // 3) 공백/괄호 제거 후 서로 포함 관계 확인
   const norm = normalizeName(trimmed);
   hit = candidates.find(s=>{
     const shortNorm = normalizeName(s.short);
@@ -1292,7 +1470,6 @@ function tickClock(){
 }
 tickClock(); setInterval(tickClock, 1000*30);
 
-/* ---------- 전체 렌더 ---------- */
 /* ---------- 가맹점 정보 관리 ---------- */
 const ADMIN_FIELDS = [
   ['brand','브랜드','select'], ['region','지역','text'], ['type','가맹점/직영점','select'],
@@ -1397,8 +1574,6 @@ document.getElementById('adminSaveBtn').addEventListener('click', ()=>{
     });
     liveStore.name = `${liveStore.brand}(${liveStore.short})`;
     if(liveStore.name !== oldName){
-      // 브랜드나 매장명을 바꾸면 지점명이 달라지는데, 이미 입력해둔 매출 데이터는 옛 이름에
-      // 묶여 있으므로 그대로 두면 화면에서 안 보이게 됨 — 새 이름으로 옮겨준다.
       PERIODS.forEach(p=>{
         if(SALES[p] && SALES[p][oldName]!==undefined){
           SALES[p][liveStore.name] = SALES[p][oldName];
@@ -1417,14 +1592,11 @@ document.getElementById('adminSaveBtn').addEventListener('click', ()=>{
 function loadArchives(){
   const raw = localStorage.getItem('yfp_archives');
   if(raw){ try{ return JSON.parse(raw); }catch(e){} }
-  return {}; // { 'YYYY-MM': {fileName, uploadedAt, html} }
+  return {};
 }
 function saveArchives(a){ localStorage.setItem('yfp_archives', JSON.stringify(a)); }
 let ARCHIVES = loadArchives();
 
-// 업로드된 마감장표 중 가장 최근 월의 당월누적매출을 "전월매출"에 자동으로 채워넣는다.
-// 예: 7월 마감장표를 올리면, 8월에 실시간 화면을 볼 때 전월매출/전월대비가 자동으로 7월 수치를 씀.
-// (기존에 수기로 입력해둔 전월 데이터가 있어도, 마감장표에 있는 지점은 그 값으로 덮어씀 — 더 정확한 값이기 때문)
 function syncPrevMonthFromArchives(){
   const months = Object.keys(ARCHIVES).sort();
   const latest = months[months.length-1];
@@ -1480,7 +1652,8 @@ document.getElementById('archiveUploadBtn').addEventListener('click', async ()=>
   const original = btn.textContent; btn.textContent = '업로드 중…';
   try{
     const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf, { type:'array' });
+    // [수정 3] cellDates:true 로 워크북 자체를 파싱 (파서 레벨에서 날짜 셀을 Date로 변환)
+    const wb = XLSX.read(buf, { type:'array', cellDates:true });
     const parsed = parseArchiveWorkbook(wb);
     const brandCount = Object.keys(parsed.brands).length;
     if(!brandCount){
@@ -1499,6 +1672,7 @@ document.getElementById('archiveUploadBtn').addEventListener('click', async ()=>
     showToast(`${month} 마감장표를 저장했어요 (${brandCount}개 브랜드 인식됨).${skipNote}`);
     document.getElementById('archiveFile').value = '';
   }catch(e){
+    console.error(e);
     showToast('파일을 읽는 데 실패했어요. 엑셀(.xlsx) 파일이 맞는지 확인해주세요.');
   }
   btn.textContent = original;
