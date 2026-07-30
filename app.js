@@ -33,14 +33,18 @@
     #view-entry .grid-table{
       display:table;
     }
-    /* 사이드바: 세로 스크롤 시 페이지와 함께 자연스럽게 움직이도록 position:static.
-       (sticky/fixed 강제 없음 — 사이드바가 페이지의 일부로 함께 스크롤됨) */
-    .side{
-      position:static !important;
-      top:auto !important;
-      height:auto !important;
-      min-height:100vh;
-      overflow:visible !important;
+    /* 사이드바: 세로로 스크롤하든 가로로 스크롤하든 화면에 그대로 고정.
+       (데스크톱 폭에서만 — 860px 이하는 하단 탭바로 별도 처리되므로 그대로 둠) */
+    @media (min-width:861px){
+      .shell{ display:block; }
+      .side{
+        position:fixed !important;
+        top:0; left:0; bottom:0; height:100vh;
+        width:232px;
+        overflow-y:auto; overflow-x:hidden;
+        z-index:30;
+      }
+      .main{ width:calc(100% - 232px); margin-left:232px; }
     }
   `;
   document.head.appendChild(st);
