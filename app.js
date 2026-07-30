@@ -181,6 +181,117 @@ const won = n => n==null || isNaN(n) ? '-' : Math.round(n).toLocaleString('ko-KR
 const pct = n => n==null || isNaN(n) ? '-' : (n>=0?'+':'') + (n*100).toFixed(1) + '%';
 const royPct = r => !r ? '-' : (r*100).toFixed(1) + '%';
 
+/* ---------- 표 컬럼 크기: 기본은 글씨 크기(내용)에 맞게 자동, 헤더 오른쪽 경계를 끌면 직접 조정 ---------- */
+// rowspan/colspan이 섞인 헤더(예: 공지용 마감장표의 2줄 헤더)도 각 셀이 실제로 몇 번째
+// 컬럼에서 시작해 몇 칸을 차지하는지 정확히 계산해준다.
+function resolveColSpans(theadRows){
+  const occupied = [];
+  const cellCols = new Map();
+  let maxCol = 0;
+  theadRows.forEach((row, rIdx)=>{
+    occupied[rIdx] = occupied[rIdx] || new Set();
+    let col = 0;
+    Array.from(row.children).forEach(cell=>{
+      while(occupied[rIdx].has(col)) col++;
+      const colspan = cell.colSpan || 1;
+      const rowspan = cell.rowSpan || 1;
+      cellCols.set(cell, { start: col, span: colspan });
+      for(let r=rIdx; r<rIdx+rowspan; r++){
+        occupied[r] = occupied[r] || new Set();
+        for(let c=col; c<col+colspan; c++) occupied[r].add(c);
+      }
+      col += colspan;
+      maxCol = Math.max(maxCol, col);
+    });
+  });
+  return { cellCols, colCount:maxCol };
+}
+function measureColumnWidths(table, cellCols, colCount){
+  const measured = new Array(colCount).fill(0);
+  cellCols.forEach(({start,span}, cell)=>{
+    if(span!==1) return;
+    const w = Math.ceil(cell.getBoundingClientRect().width);
+    if(w > measured[start]) measured[start] = w;
+  });
+  const bodyRows = table.tBodies[0] ? Array.from(table.tBodies[0].rows) : [];
+  bodyRows.forEach(row=>{
+    let col = 0;
+    Array.from(row.children).forEach(cell=>{
+      const span = cell.colSpan || 1;
+      if(span===1){
+        const w = Math.ceil(cell.getBoundingClientRect().width);
+        if(w > measured[col]) measured[col] = w;
+      }
+      col += span;
+    });
+  });
+  return measured;
+}
+function loadColWidths(key){
+  try{ return JSON.parse(localStorage.getItem('yfp_colw_'+key) || '{}'); }catch(e){ return {}; }
+}
+function saveColWidth(key, idx, width){
+  const all = loadColWidths(key);
+  all[idx] = width;
+  localStorage.setItem('yfp_colw_'+key, JSON.stringify(all));
+}
+// table: 대상 <table> 엘리먼트(현재 화면에 보이는 상태여야 폭 측정이 정확함)
+// key: 같은 종류의 표끼리 크기를 공유·저장하기 위한 식별자 (예: 'notice-sales')
+function setupColumnResize(table, key){
+  if(!table || !table.tHead || !table.tBodies[0]) return;
+  const theadRows = Array.from(table.tHead.rows);
+  const { cellCols, colCount } = resolveColSpans(theadRows);
+  if(!colCount) return;
+  const measured = measureColumnWidths(table, cellCols, colCount);
+  const saved = loadColWidths(key);
+  // col 엘리먼트는 브라우저에 따라 getBoundingClientRect가 불안정할 수 있어서,
+  // 폭은 DOM에서 다시 읽지 않고 이 배열로 직접 추적한다.
+  const widths = new Array(colCount).fill(0).map((_,i)=> saved[i] || measured[i] || 60);
+
+  const colgroup = document.createElement('colgroup');
+  widths.forEach(w=>{
+    const c = document.createElement('col');
+    c.style.width = w+'px';
+    colgroup.appendChild(c);
+  });
+  const oldColgroup = table.querySelector('colgroup');
+  if(oldColgroup) oldColgroup.remove();
+  table.insertBefore(colgroup, table.firstChild);
+  table.style.tableLayout = 'fixed';
+  const cols = Array.from(colgroup.children);
+
+  cellCols.forEach(({start,span}, cell)=>{
+    if(span!==1) return;
+    cell.classList.add('resizable-th');
+    if(getComputedStyle(cell).position === 'static') cell.style.position = 'relative';
+    const handle = document.createElement('span');
+    handle.className = 'col-resize-handle';
+    handle.title = '드래그해서 폭 조정';
+    handle.addEventListener('pointerdown', (e)=>{
+      e.preventDefault(); e.stopPropagation();
+      handle.setPointerCapture(e.pointerId);
+      const startX = e.clientX;
+      const startW = widths[start];
+      table.classList.add('resizing');
+      handle.classList.add('active');
+      const onMove = (ev)=>{
+        widths[start] = Math.max(30, Math.round(startW + (ev.clientX-startX)));
+        cols[start].style.width = widths[start]+'px';
+      };
+      const onUp = ()=>{
+        handle.removeEventListener('pointermove', onMove);
+        handle.removeEventListener('pointerup', onUp);
+        table.classList.remove('resizing');
+        handle.classList.remove('active');
+        saveColWidth(key, start, widths[start]);
+      };
+      handle.addEventListener('pointermove', onMove);
+      handle.addEventListener('pointerup', onUp);
+    });
+    cell.appendChild(handle);
+  });
+}
+
 function metricsFor(storeName, period){
   const store = STORES.find(s=>s.name===storeName);
   const rec = SALES[period]?.[storeName];
@@ -361,6 +472,7 @@ function renderReportTable(){
       <td class="num" style="font-weight:700">${won(r.m.sales)}</td><td class="num">${won(r.m.dayAvg)}</td>
       <td class="num">${won(r.proj)}</td>
       <td>${r.mom==null?'<span class="pill flat">-</span>':`<span class="pill ${r.mom>=0?'up':'down'}">${r.mom>=0?'▲':'▼'} ${pct(r.mom)}</span>`}</td></tr>`).join('');
+  setupColumnResize(document.getElementById('reportTable'), 'report');
 }
 
 let miniCharts = {};
@@ -455,12 +567,6 @@ function renderNoticeBrandBlock(brand, dateStr, showSortLabel){
       ${showSortLabel ? '<div class="hint">매출 내림차순 정렬</div>' : ''}
     </div>
     <table class="notice">
-      <colgroup>
-        <col style="width:4%"><col style="width:6%"><col style="width:9%"><col style="width:8%">
-        <col style="width:8%"><col style="width:7%"><col style="width:7%">
-        <col style="width:8%"><col style="width:8%"><col style="width:7%">
-        <col style="width:8%"><col style="width:6%"><col style="width:8%"><col style="width:6%">
-      </colgroup>
       <thead>
         <tr>
           <th rowspan="2">순위</th><th rowspan="2">지역</th><th rowspan="2">지점명</th><th rowspan="2">사업개시일</th>
@@ -514,11 +620,6 @@ function renderNoticeRoyaltyBlock(brand, dateStr){
   <div class="notice-block">
     <div class="notice-head"><div class="lft"><span class="date-chip">${dateStr} 마감 기준</span><span class="brand-chip">${brand} · 로열티현황 (개설순)</span></div></div>
     <table class="notice">
-      <colgroup>
-        <col style="width:6%"><col style="width:8%"><col style="width:14%"><col style="width:12%">
-        <col style="width:13%"><col style="width:13%"><col style="width:9%">
-        <col style="width:13%"><col style="width:12%">
-      </colgroup>
       <thead><tr><th>개설순</th><th>지역</th><th>지점명</th><th>사업개시일</th><th>당월누적</th><th>예상마감</th><th>로열티율</th><th>당월누적기준</th><th>예상마감기준</th></tr></thead>
       <tbody>${body}
         <tr class="total"><td colspan="4" class="txt">계</td><td>${won(sumCur)}</td><td>${won(sumProj)}</td><td>-</td><td class="hl-cur">${won(sumRoyCur)}</td><td class="hl-proj">${won(sumRoyProj)}</td></tr>
@@ -554,6 +655,7 @@ function renderNotice(){
     let royaltyHtml = '';
     Object.entries(a.parsed.royalty).forEach(([brand, rows])=>{ royaltyHtml += renderArchiveRoyaltyBlock(brand, dateStr, rows); });
     document.getElementById('noticeRoyaltyContainer').innerHTML = royaltyHtml || `<div class="card">로열티현황 데이터가 없어요.</div>`;
+    setupNoticeTablesResize();
     return;
   }
 
@@ -566,6 +668,11 @@ function renderNotice(){
   const ROYALTY_BRANDS = BRANDS.filter(b=>b!=='유림대패' && b!=='려원장어');
   ROYALTY_BRANDS.forEach(brand=>{ royaltyHtml += renderNoticeRoyaltyBlock(brand, dateStr); });
   document.getElementById('noticeRoyaltyContainer').innerHTML = royaltyHtml;
+  setupNoticeTablesResize();
+}
+function setupNoticeTablesResize(){
+  document.querySelectorAll('#noticeSalesContainer table.notice').forEach(t=>setupColumnResize(t,'notice-sales'));
+  document.querySelectorAll('#noticeRoyaltyContainer table.notice').forEach(t=>setupColumnResize(t,'notice-royalty'));
 }
 
 document.querySelectorAll('#noticeSubTab button').forEach(b=>b.addEventListener('click', ()=>{
@@ -610,12 +717,6 @@ function renderArchiveBrandBlock(brand, dateStr, rows, showSortLabel){
       ${showSortLabel ? '<div class="hint">매출 내림차순 정렬</div>' : ''}
     </div>
     <table class="notice">
-      <colgroup>
-        <col style="width:4%"><col style="width:6%"><col style="width:9%"><col style="width:8%">
-        <col style="width:8%"><col style="width:7%"><col style="width:7%">
-        <col style="width:8%"><col style="width:8%"><col style="width:7%">
-        <col style="width:8%"><col style="width:6%"><col style="width:8%"><col style="width:6%">
-      </colgroup>
       <thead>
         <tr>
           <th rowspan="2">순위</th><th rowspan="2">지역</th><th rowspan="2">지점명</th><th rowspan="2">사업개시일</th>
@@ -663,11 +764,6 @@ function renderArchiveRoyaltyBlock(brand, dateStr, rows){
   <div class="notice-block">
     <div class="notice-head"><div class="lft"><span class="date-chip">${dateStr} 마감 기준</span><span class="brand-chip">${brand} · 로열티현황</span></div></div>
     <table class="notice">
-      <colgroup>
-        <col style="width:6%"><col style="width:8%"><col style="width:14%"><col style="width:12%">
-        <col style="width:13%"><col style="width:13%"><col style="width:9%">
-        <col style="width:13%"><col style="width:12%">
-      </colgroup>
       <thead><tr><th>순위</th><th>지역</th><th>지점명</th><th>사업개시일</th><th>당월누적</th><th>예상마감</th><th>로열티율</th><th>당월누적기준</th><th>예상마감기준</th></tr></thead>
       <tbody>${body}
         <tr class="total"><td colspan="4" class="txt">계</td><td>${won(sumCur)}</td><td>${won(sumProj)}</td><td>-</td><td class="hl-cur">${won(sumRoyCur)}</td><td class="hl-proj">${won(sumRoyProj)}</td></tr>
@@ -997,6 +1093,7 @@ function renderEntry(){
     }).join('')}</tbody>`;
   attachPasteHandler(grid);
   attachNameValidation(grid, schema, account);
+  setupColumnResize(grid, 'entry-'+schemaKey);
 }
 
 function attachNameValidation(grid, schema, account){
@@ -1175,6 +1272,7 @@ function renderAdmin(){
         }).join('')}
         <td><button class="btn ghost small admin-del" data-id="${s.id}">삭제</button></td>
       </tr>`).join('')}</tbody>`;
+  setupColumnResize(grid, 'admin');
   document.querySelectorAll('.admin-del').forEach(b=>b.addEventListener('click', ()=>{
     const id = +b.dataset.id;
     const store = STORES.find(s=>s.id===id);
@@ -1292,6 +1390,7 @@ function renderArchiveList(){
       <td><button class="btn ghost small archive-del" data-month="${m}">삭제</button></td>
     </tr>`;
   }).join('') : `<tr><td colspan="4" class="txt" style="color:var(--muted)">아직 업로드된 마감장표가 없어요.</td></tr>`;
+  setupColumnResize(document.getElementById('archiveListTable'), 'archiveList');
   document.querySelectorAll('.archive-del').forEach(b=>b.addEventListener('click', ()=>{
     if(!confirm(`${b.dataset.month} 마감장표를 삭제할까요?`)) return;
     delete ARCHIVES[b.dataset.month];
