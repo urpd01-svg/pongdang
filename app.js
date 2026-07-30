@@ -399,13 +399,13 @@ function setupExcelResize(table, key){
   return { cols, widths };
 }
 
-/* ---------- 공지용 마감장표 — 화면 폭에 맞춰 표 확장 (폰트 그대로) ---------- */
-// 하드코딩 폭 배열 없음. 4개 브랜드 표의 컬럼별 자연 폭을 측정한 뒤,
-// 컨테이너(화면 폭 - 사이드바)를 꽉 채우도록 비례 확장한다.
-// 결과: 오른쪽 여백 없이 전 컬럼이 한 화면에 보이고, 4개 표는 완벽 일직선 정렬.
+/* ---------- 공지용 마감장표 — 컨테이너 폭에 맞춰 표 확장/압축 ---------- */
+// 4개 브랜드 표를 하나의 폭 배열로 정렬하되, 그 폭 배열을 컨테이너(사이드바 옆 영역)
+// 폭에 정확히 맞춰 스케일한다. 자연폭이 컨테이너보다 크면 축소, 작으면 확장.
+// 결과: 가로 스크롤 없이 항상 한 화면에 다 보임 + 4개 브랜드 표 일직선.
 function applyNoticeAutoWidths(tables, container){
   if(!tables.length) return;
-  // 1) 모두 auto layout으로 되돌려 자연 폭 측정
+  // 1) 자연폭 측정 위해 auto layout으로
   tables.forEach(t=>{
     const old = t.querySelector('colgroup');
     if(old) old.remove();
@@ -413,7 +413,7 @@ function applyNoticeAutoWidths(tables, container){
     t.style.width = '';
     t.style.minWidth = '';
   });
-  // 2) 컬럼별 자연 폭 측정 (모든 표의 최대치)
+  // 2) 컬럼별 자연폭 최댓값
   const perTable = tables.map(t=>{
     const theadRows = Array.from(t.tHead.rows);
     const info = resolveColSpans(theadRows);
@@ -424,44 +424,35 @@ function applyNoticeAutoWidths(tables, container){
   const natural = new Array(colCount).fill(0);
   perTable.forEach(p=>{
     for(let i=0;i<p.colCount;i++){
-      const w = (p.measured[i]||0) + 4;
+      const w = p.measured[i]||0;
       if(w > natural[i]) natural[i] = w;
     }
   });
   const naturalTotal = natural.reduce((a,b)=>a+b, 0);
 
-  // 3) 컨테이너 사용 가능 폭 계산 (padding 제외)
+  // 3) 컨테이너 사용 가능 폭
   const containerEl = container || tables[0].closest('.notice-block')?.parentElement || document.body;
   const cRect = containerEl.getBoundingClientRect();
   const cs = getComputedStyle(containerEl);
-  const availW = Math.floor(cRect.width - parseFloat(cs.paddingLeft||0) - parseFloat(cs.paddingRight||0));
+  const availW = Math.max(300, Math.floor(cRect.width - parseFloat(cs.paddingLeft||0) - parseFloat(cs.paddingRight||0)) - 2);
 
-  // 4) 자연폭 합계가 컨테이너보다 작으면 → 비례로 확장 (오른쪽 빈 공간 채움)
-  //    자연폭 합계가 컨테이너보다 크면 → 자연폭 그대로 (가로 스크롤 발생 — 어쩔 수 없음)
-  let widths;
-  if(naturalTotal > 0 && availW > naturalTotal){
-    const ratio = availW / naturalTotal;
-    widths = natural.map(w=> Math.floor(w * ratio));
-    // 반올림 오차 보정
-    const diff = availW - widths.reduce((a,b)=>a+b,0);
-    if(diff !== 0){
-      // 가장 큰 컬럼에 오차 반영
-      let maxIdx = 0;
-      widths.forEach((w,i)=>{ if(w > widths[maxIdx]) maxIdx = i; });
-      widths[maxIdx] += diff;
-    }
-  }else{
-    widths = natural.slice();
+  // 4) 비례 스케일 (커도 축소, 작아도 확장) → 항상 컨테이너에 딱 맞춤
+  const ratio = naturalTotal > 0 ? availW / naturalTotal : 1;
+  const widths = natural.map(w => Math.max(28, Math.floor(w * ratio)));
+  const diff = availW - widths.reduce((a,b)=>a+b,0);
+  if(diff !== 0){
+    let maxIdx = 0;
+    widths.forEach((w,i)=>{ if(w > widths[maxIdx]) maxIdx = i; });
+    widths[maxIdx] += diff;
   }
   const totalW = widths.reduce((a,b)=>a+b, 0);
 
-  // 5) 모든 표에 동일 colgroup 심기
+  // 5) 모든 표에 동일 colgroup 심고 fixed layout
   tables.forEach(t=>{
     const cg = document.createElement('colgroup');
     widths.forEach(w=>{
       const c = document.createElement('col');
       c.style.width = w+'px';
-      c.style.minWidth = w+'px';
       cg.appendChild(c);
     });
     t.insertBefore(cg, t.firstChild);
@@ -852,18 +843,18 @@ function renderNotice(){
   requestAnimationFrame(applyNoticeFixedLayout);
 }
 
-// 공지용: 4개 브랜드 표에 자연폭 기반 동일 폭 적용, 컨테이너 폭 꽉 채우기
+// 공지용: 4개 브랜드 표를 컨테이너 폭에 맞춰 스케일 (한 화면에 다 보임)
 function applyNoticeFixedLayout(){
   const salesCont = document.getElementById('noticeSalesContainer');
-  const royCont   = document.getElementById('noticeRoyaltyContainer');
+  const royCont = document.getElementById('noticeRoyaltyContainer');
   const salesTables = Array.from(salesCont.querySelectorAll('table.notice-sales'));
   const royTables   = Array.from(royCont.querySelectorAll('table.notice-royalty'));
   if(salesTables.length) applyNoticeAutoWidths(salesTables, salesCont);
   if(royTables.length)   applyNoticeAutoWidths(royTables, royCont);
 }
-// 창 크기 바뀌면 다시 계산
+// 창 크기 바뀌면 재계산
 window.addEventListener('resize', ()=>{
-  if(state.view === 'notice') applyNoticeFixedLayout();
+  if(state.view === 'notice') requestAnimationFrame(applyNoticeFixedLayout);
 });
 
 document.querySelectorAll('#noticeSubTab button').forEach(b=>b.addEventListener('click', ()=>{
@@ -1133,37 +1124,28 @@ async function copyNoticeAsImage(){
   const original = btn.textContent;
   btn.textContent = '이미지 만드는 중…';
   try{
-    // ★ 표만 캡처: 원본 컨테이너에서 표(notice-block)만 추려 임시 wrapper로 감싼다
+    // ★ 표만 캡처: notice-block(각 표 블록)만 임시 래퍼로 옮겨서 캡처
     const source = document.getElementById(activeNoticeContainerId());
     const blocks = Array.from(source.querySelectorAll('.notice-block'));
     if(!blocks.length){ showToast('표가 없어 이미지를 만들 수 없어요.'); btn.textContent = original; return; }
 
-    // 임시 컨테이너 (화면 밖에 배치)
+    const srcW = source.getBoundingClientRect().width;
     const wrap = document.createElement('div');
-    wrap.style.cssText = 'position:fixed;left:-99999px;top:0;background:#F3F4F7;padding:8px;box-sizing:border-box;display:inline-block;';
-    // 표 블록을 복제해서 담기
+    wrap.style.cssText = 'position:fixed;left:-99999px;top:0;background:#F3F4F7;padding:8px;box-sizing:border-box;';
+    wrap.style.width = Math.ceil(srcW) + 'px';
     blocks.forEach(b=>{
       const clone = b.cloneNode(true);
       clone.style.marginBottom = '10px';
-      clone.style.overflowX = 'visible';
-      clone.style.borderRadius = '10px';
+      clone.style.overflow = 'hidden';
       wrap.appendChild(clone);
     });
     document.body.appendChild(wrap);
 
-    // 복제된 표들에 자연폭+비례확장 다시 적용 (원본 컨테이너 폭 기준)
-    const clonedTables = Array.from(wrap.querySelectorAll('table.notice-sales, table.notice-royalty'));
-    // 원본 컨테이너 폭을 기준으로 확장
-    const refWidth = source.getBoundingClientRect().width;
-    // 임시 감쌈 요소에 폭 부여
-    wrap.style.width = Math.ceil(refWidth + 16) + 'px';
-    if(clonedTables.length){
-      // salesTables끼리, royTables끼리 각각 정렬
-      const salesTables = clonedTables.filter(t=>t.classList.contains('notice-sales'));
-      const royTables = clonedTables.filter(t=>t.classList.contains('notice-royalty'));
-      if(salesTables.length) applyNoticeAutoWidths(salesTables, wrap);
-      if(royTables.length) applyNoticeAutoWidths(royTables, wrap);
-    }
+    // 복제된 표들에도 폭 재계산 (원본 컨테이너 폭 기준으로 fit)
+    const salesTables = Array.from(wrap.querySelectorAll('table.notice-sales'));
+    const royTables = Array.from(wrap.querySelectorAll('table.notice-royalty'));
+    if(salesTables.length) applyNoticeAutoWidths(salesTables, wrap);
+    if(royTables.length) applyNoticeAutoWidths(royTables, wrap);
 
     await new Promise(r=>requestAnimationFrame(r));
     const rect = wrap.getBoundingClientRect();
