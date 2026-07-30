@@ -399,26 +399,42 @@ function setupExcelResize(table, key){
   return { cols, widths };
 }
 
-/* ---------- 공지용 마감장표 — 4개 브랜드 표 완벽 정렬 (고정 폭, 명시적 colgroup) ---------- */
-// 브랜드에 관계없이 항상 같은 폭. 절대 변하지 않음.
-// index는 컬럼 순서 그대로 (0=순위, 1=지역, 2=지점명, 3=사업개시일,
-//                        4=전일매출, 5=영수건수, 6=영수단가, 7=당월누적매출,
-//                        8=당월예상마감, 9=일평균매출, 10=전월매출, 11=증감률,
-//                        12=전년동월매출, 13=증감률)
-const NOTICE_SALES_FIXED_WIDTHS = [50, 60, 130, 110,  110, 90, 95, 130, 130, 110,  120, 90, 120, 90];
-// 로열티: 0=순위, 1=지역, 2=지점명, 3=사업개시일, 4=당월누적, 5=예상마감, 6=로열티율, 7=당월누적기준, 8=예상마감기준
-const NOTICE_ROY_FIXED_WIDTHS = [60, 60, 130, 110, 130, 130, 90, 130, 130];
-
-function applyFixedNoticeWidths(tables, fixedWidths){
+/* ---------- 공지용 마감장표 — 4개 브랜드 표 자연폭 측정 후 동일 정렬 ---------- */
+// 하드코딩 폭 배열 없음. 각 표의 자연 폭을 모두 재서 컬럼별 최댓값을 취해
+// 모든 브랜드 표에 동일한 폭을 적용한다. 이렇게 하면 브랜드마다 지점 개수가
+// 달라도(예: 얼얼하이 2개) 전체가 같은 폭으로 일직선 정렬되고,
+// 전년동월 매출까지 모든 컬럼이 잘림 없이 그대로 표시된다.
+function applyNoticeAutoWidths(tables){
   if(!tables.length) return;
-  const totalW = fixedWidths.reduce((a,b)=>a+b,0);
+  // 1) 모두 auto layout으로 되돌려서 자연 폭 측정
   tables.forEach(t=>{
-    // 기존 colgroup 제거
     const old = t.querySelector('colgroup');
     if(old) old.remove();
-    // 새 colgroup 심기 — 모든 표에 동일
+    t.style.tableLayout = 'auto';
+    t.style.width = '';
+    t.style.minWidth = '';
+  });
+  // 2) 각 표의 컬럼별 폭 측정
+  const perTable = tables.map(t=>{
+    const theadRows = Array.from(t.tHead.rows);
+    const info = resolveColSpans(theadRows);
+    const measured = measureColumnWidths(t, info.cellCols, info.colCount);
+    return { table:t, colCount:info.colCount, measured };
+  });
+  // 3) 컬럼 개수 최댓값 기준으로 컬럼별 최대 폭 계산
+  const colCount = Math.max(...perTable.map(p=>p.colCount));
+  const widths = new Array(colCount).fill(0);
+  perTable.forEach(p=>{
+    for(let i=0;i<p.colCount;i++){
+      const w = (p.measured[i]||0) + 4; // 여유 4px
+      if(w > widths[i]) widths[i] = w;
+    }
+  });
+  const totalW = widths.reduce((a,b)=>a+b,0);
+  // 4) 모든 표에 동일한 colgroup 심기
+  tables.forEach(t=>{
     const cg = document.createElement('colgroup');
-    fixedWidths.forEach(w=>{
+    widths.forEach(w=>{
       const c = document.createElement('col');
       c.style.width = w+'px';
       c.style.minWidth = w+'px';
@@ -723,7 +739,7 @@ function renderNoticeBrandBlock(brand, dateStr, showSortLabel){
           <td>${won(r.prevYear)}</td><td>${deltaSpan(r.yoyP)}</td>
         </tr>`).join('')}
         <tr class="total">
-          <td>&nbsp;</td><td>&nbsp;</td><td class="txt">합계</td><td>&nbsp;</td>
+          <td colspan="4" class="txt">합계</td>
           <td>${won(sums.prevDay)}</td><td>${won(sums.receipts)}</td><td>${won(sumUnit)}</td>
           <td class="hl-cur">${won(sums.sales)}</td><td class="hl-proj">${won(sums.proj)}</td><td>-</td>
           <td>${won(sums.prevMonth)}</td><td>${deltaSpan(sumMom)}</td>
@@ -757,7 +773,7 @@ function renderNoticeRoyaltyBlock(brand, dateStr){
     <table class="notice notice-royalty" data-brand="${brand}">
       <thead><tr><th>개설순</th><th>지역</th><th>지점명</th><th>사업개시일</th><th>당월누적</th><th>예상마감</th><th>로열티율</th><th>당월누적기준</th><th>예상마감기준</th></tr></thead>
       <tbody>${body}
-        <tr class="total"><td>&nbsp;</td><td>&nbsp;</td><td class="txt">계</td><td>&nbsp;</td><td>${won(sumCur)}</td><td>${won(sumProj)}</td><td>-</td><td class="hl-cur">${won(sumRoyCur)}</td><td class="hl-proj">${won(sumRoyProj)}</td></tr>
+        <tr class="total"><td colspan="4" class="txt">계</td><td>${won(sumCur)}</td><td>${won(sumProj)}</td><td>-</td><td class="hl-cur">${won(sumRoyCur)}</td><td class="hl-proj">${won(sumRoyProj)}</td></tr>
       </tbody>
     </table>
   </div>`;
@@ -812,12 +828,13 @@ function renderNotice(){
   requestAnimationFrame(applyNoticeFixedLayout);
 }
 
-// 공지용: 4개 브랜드 표 모두에 동일한 고정 colgroup 적용
+// 공지용: 4개 브랜드 표 모두에 자연폭 기반 동일 colgroup 적용
+// (매출표끼리 / 로열티표끼리 각각 정렬)
 function applyNoticeFixedLayout(){
   const salesTables = Array.from(document.querySelectorAll('#noticeSalesContainer table.notice-sales'));
   const royTables   = Array.from(document.querySelectorAll('#noticeRoyaltyContainer table.notice-royalty'));
-  if(salesTables.length) applyFixedNoticeWidths(salesTables, NOTICE_SALES_FIXED_WIDTHS);
-  if(royTables.length)   applyFixedNoticeWidths(royTables, NOTICE_ROY_FIXED_WIDTHS);
+  if(salesTables.length) applyNoticeAutoWidths(salesTables);
+  if(royTables.length)   applyNoticeAutoWidths(royTables);
 }
 
 document.querySelectorAll('#noticeSubTab button').forEach(b=>b.addEventListener('click', ()=>{
@@ -882,7 +899,7 @@ function renderArchiveBrandBlock(brand, dateStr, rows, showSortLabel){
           <td>${won(r.prevYear)}</td><td>${deltaSpan(r.yoyP)}</td>
         </tr>`).join('')}
         <tr class="total">
-          <td>&nbsp;</td><td>&nbsp;</td><td class="txt">합계</td><td>&nbsp;</td>
+          <td colspan="4" class="txt">합계</td>
           <td>${won(sums.prevDay)}</td><td>${won(sums.receipts)}</td><td>${won(sumUnit)}</td>
           <td class="hl-cur">${won(sums.sales)}</td><td class="hl-proj">${won(sums.proj)}</td><td>-</td>
           <td>${won(sums.prevMonth)}</td><td>${deltaSpan(sumMom)}</td>
@@ -910,7 +927,7 @@ function renderArchiveRoyaltyBlock(brand, dateStr, rows){
     <table class="notice notice-royalty" data-brand="${brand}">
       <thead><tr><th>순위</th><th>지역</th><th>지점명</th><th>사업개시일</th><th>당월누적</th><th>예상마감</th><th>로열티율</th><th>당월누적기준</th><th>예상마감기준</th></tr></thead>
       <tbody>${body}
-        <tr class="total"><td>&nbsp;</td><td>&nbsp;</td><td class="txt">계</td><td>&nbsp;</td><td>${won(sumCur)}</td><td>${won(sumProj)}</td><td>-</td><td class="hl-cur">${won(sumRoyCur)}</td><td class="hl-proj">${won(sumRoyProj)}</td></tr>
+        <tr class="total"><td colspan="4" class="txt">계</td><td>${won(sumCur)}</td><td>${won(sumProj)}</td><td>-</td><td class="hl-cur">${won(sumRoyCur)}</td><td class="hl-proj">${won(sumRoyProj)}</td></tr>
       </tbody>
     </table>
   </div>`;
@@ -1106,8 +1123,8 @@ async function copyNoticeAsImage(){
     // 임시 컨테이너 안의 표들에도 고정 폭 다시 적용
     const salesTables = Array.from(clone.querySelectorAll('table.notice-sales'));
     const royTables = Array.from(clone.querySelectorAll('table.notice-royalty'));
-    if(salesTables.length) applyFixedNoticeWidths(salesTables, NOTICE_SALES_FIXED_WIDTHS);
-    if(royTables.length) applyFixedNoticeWidths(royTables, NOTICE_ROY_FIXED_WIDTHS);
+    if(salesTables.length) applyNoticeAutoWidths(salesTables);
+    if(royTables.length) applyNoticeAutoWidths(royTables);
 
     // 실제 표들의 최대 폭 측정 → 컨테이너 폭을 그 폭에 padding만큼만 여유주고 딱 맞춤
     await new Promise(r=>requestAnimationFrame(r));
