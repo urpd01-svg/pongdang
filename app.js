@@ -33,8 +33,8 @@
     #view-entry .grid-table{
       display:table;
     }
-    /* 사이드바 확실히 고정 */
-    .side{ position:sticky !important; top:0 !important; z-index:50; }
+    /* 사이드바: 세로 스크롤은 함께 움직이지만 가로 스크롤 시에는 밀리지 않도록.
+       (position:sticky top:0은 원본에 있음 — 그대로 유지) */
   `;
   document.head.appendChild(st);
 })();
