@@ -235,8 +235,55 @@ function saveColWidth(key, idx, width){
   all[idx] = width;
   localStorage.setItem('yfp_colw_'+key, JSON.stringify(all));
 }
+let _measureCanvasCtx = null;
+function textPixelWidth(text, font){
+  if(!_measureCanvasCtx) _measureCanvasCtx = document.createElement('canvas').getContext('2d');
+  _measureCanvasCtx.font = font;
+  return _measureCanvasCtx.measureText(text ?? '').width;
+}
+// 입력칸에 타이핑하거나 드롭다운을 바꿀 때, 그 글자가 다 보이도록 컬럼을 자동으로 넓혀준다
+// (좁히지는 않음 — 직접 좁힌 폭을 타이핑이 다시 늘려버리지 않게 하려면 별도 처리가 필요해서,
+//  여기서는 "필요하면 넓어진다"만 보장한다)
+function attachAutoFitOnType(table, key){
+  const colgroup = table.querySelector('colgroup');
+  if(!colgroup) return;
+  const cols = Array.from(colgroup.children);
+  const grow = (el)=>{
+    const td = el.closest('td');
+    if(!td) return;
+    const colIdx = Array.from(td.parentNode.children).indexOf(td);
+    const col = cols[colIdx];
+    if(!col) return;
+    const cs = getComputedStyle(el);
+    const text = el.tagName==='SELECT' ? (el.options[el.selectedIndex]?.text || '') : el.value;
+    const needed = Math.ceil(textPixelWidth(text, `${cs.fontSize} ${cs.fontFamily}`)) + 28;
+    const cur = parseFloat(col.style.width) || 0;
+    if(needed > cur){
+      col.style.width = needed + 'px';
+      saveColWidth(key, colIdx, needed);
+    }
+  };
+  table.querySelectorAll('tbody input, tbody select').forEach(el=>{
+    el.addEventListener('input', ()=>grow(el));
+    if(el.tagName==='SELECT') el.addEventListener('change', ()=>grow(el));
+  });
+}
 // table: 대상 <table> 엘리먼트(현재 화면에 보이는 상태여야 폭 측정이 정확함)
 // key: 같은 종류의 표끼리 크기를 공유·저장하기 위한 식별자 (예: 'notice-sales')
+let _resizeGuide = null;
+function getResizeGuide(){
+  if(_resizeGuide && document.body.contains(_resizeGuide)) return _resizeGuide;
+  const g = document.createElement('div');
+  g.style.position = 'fixed';
+  g.style.width = '2px';
+  g.style.background = 'var(--blue)';
+  g.style.zIndex = '9999';
+  g.style.display = 'none';
+  g.style.pointerEvents = 'none';
+  document.body.appendChild(g);
+  _resizeGuide = g;
+  return g;
+}
 function setupColumnResize(table, key){
   if(!table || !table.tHead || !table.tBodies[0]) return;
   const theadRows = Array.from(table.tHead.rows);
@@ -272,18 +319,31 @@ function setupColumnResize(table, key){
       handle.setPointerCapture(e.pointerId);
       const startX = e.clientX;
       const startW = widths[start];
-      table.classList.add('resizing');
+      let finalW = startW;
+      // 드래그 중엔 표를 매번 다시 그리지 않고, 커서를 따라가는 얇은 안내선만 움직인다
+      // (표를 계속 리플로우하면 무겁게 느껴지고, 표 전체 폭이 고정이라 다른 컬럼이 실시간으로
+      // 줄어드는 것처럼 보이는 원인도 됐음 — 엑셀처럼 놓을 때 한 번만 적용되게 함)
+      const guide = getResizeGuide();
+      const tableRect = table.getBoundingClientRect();
+      guide.style.top = tableRect.top + 'px';
+      guide.style.height = tableRect.height + 'px';
+      guide.style.left = e.clientX + 'px';
+      guide.style.display = 'block';
       handle.classList.add('active');
+      document.body.classList.add('col-resizing');
       const onMove = (ev)=>{
-        widths[start] = Math.max(30, Math.round(startW + (ev.clientX-startX)));
-        cols[start].style.width = widths[start]+'px';
+        finalW = Math.max(30, Math.round(startW + (ev.clientX-startX)));
+        guide.style.left = ev.clientX + 'px';
       };
       const onUp = ()=>{
         handle.removeEventListener('pointermove', onMove);
         handle.removeEventListener('pointerup', onUp);
-        table.classList.remove('resizing');
+        guide.style.display = 'none';
         handle.classList.remove('active');
-        saveColWidth(key, start, widths[start]);
+        document.body.classList.remove('col-resizing');
+        widths[start] = finalW;
+        cols[start].style.width = finalW + 'px';
+        saveColWidth(key, start, finalW);
       };
       handle.addEventListener('pointermove', onMove);
       handle.addEventListener('pointerup', onUp);
@@ -1094,6 +1154,7 @@ function renderEntry(){
   attachPasteHandler(grid);
   attachNameValidation(grid, schema, account);
   setupColumnResize(grid, 'entry-'+schemaKey);
+  attachAutoFitOnType(grid, 'entry-'+schemaKey);
 }
 
 function attachNameValidation(grid, schema, account){
@@ -1273,6 +1334,7 @@ function renderAdmin(){
         <td><button class="btn ghost small admin-del" data-id="${s.id}">삭제</button></td>
       </tr>`).join('')}</tbody>`;
   setupColumnResize(grid, 'admin');
+  attachAutoFitOnType(grid, 'admin');
   document.querySelectorAll('.admin-del').forEach(b=>b.addEventListener('click', ()=>{
     const id = +b.dataset.id;
     const store = STORES.find(s=>s.id===id);
