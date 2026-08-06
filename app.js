@@ -118,13 +118,46 @@ const BRANDS = ['퐁당','유림대패','려원장어','얼얼하이'];
 const BRAND_ALIASES = { '마라꼬치':'얼얼하이' };
 const BRAND_COLORS = { '퐁당':'#2B6CB0', '유림대패':'#2F9E5C', '려원장어':'#D98B2B', '얼얼하이':'#B0323F' };
 const BRAND_COLOR_LIST = BRANDS.map(b=>BRAND_COLORS[b]);
+const ROYALTY_ELIGIBLE_BRANDS = BRANDS.filter(b=>b!=='유림대패' && b!=='려원장어');
 const PERIODS = ['당월누적','전일','토요일','전월','전년동월'];
 const PERIOD_DAYS_DEFAULT = { '당월누적':26, '전일':1, '토요일':1, '전월':30, '전년동월':28 };
 const MONTH_TOTAL_DAYS = 31;
+// '전월'/'전년동월'은 다른 3개 기간과 달리 "월마다 값이 달라야" 하므로 절대월(YYYY-MM) 단위로
+// 따로 저장한다. SALES['전월'] / SALES['전년동월'] 의 구조가 { storeName: rec } 이 아니라
+// { 'YYYY-MM': { storeName: rec } } 인 이유가 바로 이것 — 관련 로직은 아래 getSalesRec 계열 참고.
+const MONTHLY_PERIODS = new Set(['전월','전년동월']);
+
+// Date 객체 → 'YYYY-MM-DD' (로컬 날짜 기준). toISOString()은 UTC로 변환하기 때문에
+// 자정~오전 9시(KST) 사이에는 날짜가 하루 밀려 보이는 문제가 있어 이 함수로 통일한다.
+function toLocalISODate(d){
+  const y = d.getFullYear(), m = d.getMonth()+1, day = d.getDate();
+  return `${y}-${String(m).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+}
+function todayLocalStr(){ return toLocalISODate(new Date()); }
+function monthKeyOf(dateStr){
+  const d = new Date(dateStr);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+}
+// dateStr이 속한 월에서 offset개월만큼 이동한 'YYYY-MM'을 반환. (일자는 1일로 고정 후 이동 —
+// 31일처럼 다음 달에 없는 날짜로 인한 오버플로를 방지)
+function shiftMonthKey(dateStr, offset){
+  const d = new Date(dateStr);
+  d.setDate(1);
+  d.setMonth(d.getMonth()+offset);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+}
+// 기준일(baseDateStr)이 속한 월 기준으로, 이 period(전월/전년동월)가 실제로 가리키는
+// "절대월" 키를 계산한다. 예) baseDateStr이 2026-09-xx 이면 전월→'2026-08', 전년동월→'2025-09'.
+function targetMonthKeyFor(period, baseDateStr){
+  if(period==='전월') return shiftMonthKey(baseDateStr, -1);
+  if(period==='전년동월') return shiftMonthKey(baseDateStr, -12);
+  return null;
+}
+function defaultWorkMonth(){ return defaultRefDate().slice(0,7); }
 
 function defaultRefDate(){
   const d = new Date(); d.setDate(d.getDate()-1);
-  return d.toISOString().slice(0,10);
+  return toLocalISODate(d);
 }
 function getRefDate(){ return state.refDate || defaultRefDate(); }
 function daysInMonthOffset(dateStr, monthOffset){
@@ -171,46 +204,158 @@ function storesForAccount(account){
   return STORES.filter(s=>accountOf(s)===account);
 }
 
+function buildSeedRecord(period, s){
+  const scale = PERIOD_DAYS_DEFAULT[period];
+  const dayAvg = 1_700_000 + Math.round(Math.random()*1_600_000);
+  const sales = Math.round(dayAvg * scale * (0.85+Math.random()*0.3));
+  const receipts = Math.round(sales / (11000 + Math.random()*6000));
+  return {
+    총매출액:sales, 실매출액:sales, 매출액:sales, 결제합계:sales, '매출 금액':sales, 순매출:sales,
+    영업일수:scale, '일평균 실매출액': Math.round(sales/(scale||1)),
+    영수건수:receipts, 전표수:receipts, 건수:receipts,
+    영수단가: Math.round(sales/(receipts||1)), 객단가: Math.round(sales/(receipts||1)),
+    객수: Math.round(receipts*1.05),
+    가액: Math.round(sales/1.1), 부가세: Math.round(sales-sales/1.1), 총할인액: Math.round(sales*0.02),
+    '점유율(%)': +(3+Math.random()*10).toFixed(2), 현금영수: 0,
+    단순현금: Math.round(sales*0.25), 신용카드: Math.round(sales*0.7), 할인합계: Math.round(sales*0.02),
+    현금: Math.round(sales*0.25), 카드: Math.round(sales*0.7), 포인트: Math.round(sales*0.02), 외상:0, 기타:0,
+    공급가액: Math.round(sales/1.1), 세금: Math.round(sales-sales/1.1),
+    수량: Math.round(receipts*1.3), 총판매금액: sales, 총반품금액: 0, '총 매출 금액': sales, '할인 금액': Math.round(sales*0.02),
+    현금매출: Math.round(sales*0.25), 카드매출: Math.round(sales*0.6), 간편결제매출: Math.round(sales*0.1),
+    상품권매출:0, 포인트매출: Math.round(sales*0.03), 오더주문매출: Math.round(sales*0.02), 즉시환급매출:0, 기타매출:0,
+    매장코드: `ST${String(s.id+1).padStart(3,'0')}`, 매출일자: '',
+  };
+}
+
 function seedSales(){
   const base = {};
+  const anchor = defaultRefDate();
   PERIODS.forEach(period=>{
     base[period] = {};
-    STORES.forEach(s=>{
-      const scale = PERIOD_DAYS_DEFAULT[period];
-      const dayAvg = 1_700_000 + Math.round(Math.random()*1_600_000);
-      const sales = Math.round(dayAvg * scale * (0.85+Math.random()*0.3));
-      const receipts = Math.round(sales / (11000 + Math.random()*6000));
-      const rec = {
-        총매출액:sales, 실매출액:sales, 매출액:sales, 결제합계:sales, '매출 금액':sales, 순매출:sales,
-        영업일수:scale, '일평균 실매출액': Math.round(sales/(scale||1)),
-        영수건수:receipts, 전표수:receipts, 건수:receipts,
-        영수단가: Math.round(sales/(receipts||1)), 객단가: Math.round(sales/(receipts||1)),
-        객수: Math.round(receipts*1.05),
-        가액: Math.round(sales/1.1), 부가세: Math.round(sales-sales/1.1), 총할인액: Math.round(sales*0.02),
-        '점유율(%)': +(3+Math.random()*10).toFixed(2), 현금영수: 0,
-        단순현금: Math.round(sales*0.25), 신용카드: Math.round(sales*0.7), 할인합계: Math.round(sales*0.02),
-        현금: Math.round(sales*0.25), 카드: Math.round(sales*0.7), 포인트: Math.round(sales*0.02), 외상:0, 기타:0,
-        공급가액: Math.round(sales/1.1), 세금: Math.round(sales-sales/1.1),
-        수량: Math.round(receipts*1.3), 총판매금액: sales, 총반품금액: 0, '총 매출 금액': sales, '할인 금액': Math.round(sales*0.02),
-        현금매출: Math.round(sales*0.25), 카드매출: Math.round(sales*0.6), 간편결제매출: Math.round(sales*0.1),
-        상품권매출:0, 포인트매출: Math.round(sales*0.03), 오더주문매출: Math.round(sales*0.02), 즉시환급매출:0, 기타매출:0,
-        매장코드: `ST${String(s.id+1).padStart(3,'0')}`, 매출일자: '',
-      };
-      base[period][s.name] = rec;
-    });
+    if(MONTHLY_PERIODS.has(period)){
+      const mk = targetMonthKeyFor(period, anchor);
+      base[period][mk] = {};
+      STORES.forEach(s=>{ base[period][mk][s.name] = buildSeedRecord(period, s); });
+    }else{
+      STORES.forEach(s=>{ base[period][s.name] = buildSeedRecord(period, s); });
+    }
   });
   return base;
 }
 
+// 구버전 데이터 마이그레이션: 예전에는 SALES['전월']/SALES['전년동월']이 { storeName: rec }
+// 형태(월 구분 없이 하나만 보관)였다. 새 구조는 { 'YYYY-MM': { storeName: rec } }.
+// 이미 입력해둔 값을 잃지 않도록, 평면 구조가 감지되면 "지금 기준으로 그 값이 가리키던 절대월"
+// 밑으로 그대로 옮겨준다 — 마이그레이션 직후에는 기존과 동일하게 보이고, 이후 새로 입력하는
+// 값부터는 월별로 올바르게 분리 저장된다.
+function migrateMonthlySalesShape(sales){
+  const monthKeyPattern = /^\d{4}-\d{2}$/;
+  const anchor = defaultRefDate();
+  MONTHLY_PERIODS.forEach(period=>{
+    const bucket = sales[period];
+    if(!bucket || typeof bucket !== 'object'){ sales[period] = {}; return; }
+    const keys = Object.keys(bucket);
+    const alreadyNested = keys.length===0 || keys.every(k=>monthKeyPattern.test(k));
+    if(alreadyNested) return;
+    const mk = targetMonthKeyFor(period, anchor);
+    sales[period] = { [mk]: bucket };
+  });
+}
+
 function loadSales(){
   const raw = localStorage.getItem('yfp_sales_v2');
-  if(raw){ try{ return JSON.parse(raw); }catch(e){} }
+  if(raw){
+    try{
+      const parsed = JSON.parse(raw);
+      migrateMonthlySalesShape(parsed);
+      localStorage.setItem('yfp_sales_v2', JSON.stringify(parsed));
+      return parsed;
+    }catch(e){}
+  }
   const seeded = seedSales();
   localStorage.setItem('yfp_sales_v2', JSON.stringify(seeded));
   return seeded;
 }
 function saveSales(data){ localStorage.setItem('yfp_sales_v2', JSON.stringify(data)); }
 let SALES = loadSales();
+
+/* ---------- 전월/전년동월 월별 조회·저장 헬퍼 ----------
+   전월·전년동월은 SALES[period][절대월][매장명] 구조로 보관된다. 아래 함수들이
+   이 중첩 구조와 나머지 3개 기간(당월누적/전일/토요일)의 평면 구조 차이를 감춰준다. */
+function getSalesRecRaw(period, storeName, baseDateStr){
+  if(MONTHLY_PERIODS.has(period)){
+    const mk = targetMonthKeyFor(period, baseDateStr || getRefDate());
+    return SALES[period]?.[mk]?.[storeName];
+  }
+  return SALES[period]?.[storeName];
+}
+// 화면 표시/집계용 조회. 전년동월 값이 아직 없으면, 같은 절대월의 전월 버킷(=월별 실적
+// 저장소 역할도 겸함)에서 대신 찾아준다 — 월마감 엑셀을 꾸준히 쌓아두면 1년 뒤부터는
+// 전년동월을 따로 입력하지 않아도 자동으로 채워지는 효과가 있다.
+function getSalesRec(period, storeName, baseDateStr){
+  let rec = getSalesRecRaw(period, storeName, baseDateStr);
+  if((!rec || !Object.keys(rec).length) && period==='전년동월'){
+    const mk = targetMonthKeyFor('전년동월', baseDateStr || getRefDate());
+    rec = SALES['전월']?.[mk]?.[storeName];
+  }
+  return rec;
+}
+function setSalesRec(period, storeName, baseDateStr, rec){
+  SALES[period] = SALES[period] || {};
+  if(MONTHLY_PERIODS.has(period)){
+    const mk = targetMonthKeyFor(period, baseDateStr || getRefDate());
+    SALES[period][mk] = SALES[period][mk] || {};
+    SALES[period][mk][storeName] = rec;
+  }else{
+    SALES[period][storeName] = rec;
+  }
+}
+function deleteStoreSales(storeName){
+  PERIODS.forEach(p=>{
+    if(!SALES[p]) return;
+    if(MONTHLY_PERIODS.has(p)){
+      Object.keys(SALES[p]).forEach(mk=>{ delete SALES[p][mk][storeName]; });
+    }else{
+      delete SALES[p][storeName];
+    }
+  });
+}
+function migrateStoreSales(oldName, newName){
+  PERIODS.forEach(p=>{
+    if(!SALES[p]) return;
+    if(MONTHLY_PERIODS.has(p)){
+      Object.keys(SALES[p]).forEach(mk=>{
+        if(SALES[p][mk] && SALES[p][mk][oldName]!==undefined){
+          SALES[p][mk][newName] = SALES[p][mk][oldName];
+          delete SALES[p][mk][oldName];
+        }
+      });
+    }else if(SALES[p][oldName]!==undefined){
+      SALES[p][newName] = SALES[p][oldName];
+      delete SALES[p][oldName];
+    }
+  });
+}
+
+/* ---------- 전일 기준 데이터로 복구(일일 스냅샷) ----------
+   하루 중 처음 앱을 열 때, 그 시점까지의 SALES(=전날 마감된 최종 데이터)를 스냅샷으로
+   고정해둔다. 같은 날 안에는 스냅샷을 다시 갱신하지 않으므로, 그날 안에 실수로 데이터를
+   잘못 건드려도 "전일 기준 데이터로 복구" 버튼으로 되돌릴 수 있다. */
+const DAILY_SNAPSHOT_KEY = 'yfp_sales_daily_snapshot';
+function loadDailySnapshot(){
+  const raw = localStorage.getItem(DAILY_SNAPSHOT_KEY);
+  if(raw){ try{ return JSON.parse(raw); }catch(e){} }
+  return null;
+}
+function saveDailySnapshot(snap){ localStorage.setItem(DAILY_SNAPSHOT_KEY, JSON.stringify(snap)); }
+function ensureDailySnapshot(){
+  const today = todayLocalStr();
+  const snap = loadDailySnapshot();
+  if(!snap || snap.date !== today){
+    saveDailySnapshot({ date: today, sales: SALES });
+  }
+}
+ensureDailySnapshot();
 
 const won = n => n==null || isNaN(n) ? '-' : Math.round(n).toLocaleString('ko-KR');
 const pct = n => n==null || isNaN(n) ? '-' : (n>=0?'+':'') + (n*100).toFixed(1) + '%';
@@ -510,9 +655,9 @@ function applyNoticeAutoWidths(tables, container){
   });
 }
 
-function metricsFor(storeName, period){
+function metricsFor(storeName, period, baseDateStr){
   const store = STORES.find(s=>s.name===storeName);
-  const rec = SALES[period]?.[storeName];
+  const rec = getSalesRec(period, storeName, baseDateStr);
   if(!rec || !store) return null;
   const schema = POS_SCHEMA[store.pos];
   const sales = +rec[schema.sales] || 0;
@@ -541,7 +686,7 @@ function yoyChange(storeName){
 }
 
 /* ---------- 상태 ---------- */
-let state = { view:'report', reportBrand:'전체', reportPeriod:'당월누적', storeBrand:'전체', storeQuery:'', entryPeriod:'당월누적', entryPos:'OK포스', refDate: defaultRefDate() };
+let state = { view:'report', reportBrand:'전체', reportPeriod:'당월누적', storeBrand:'전체', storeQuery:'', entryPeriod:'당월누적', entryPos:'OK포스', entryMonth: defaultWorkMonth(), refDate: defaultRefDate() };
 let charts = {};
 
 const TITLES = {
@@ -887,7 +1032,7 @@ function renderNotice(){
   document.getElementById('noticeSalesContainer').innerHTML = salesHtml;
 
   let royaltyHtml = '';
-  const ROYALTY_BRANDS = BRANDS.filter(b=>b!=='유림대패' && b!=='려원장어');
+  const ROYALTY_BRANDS = ROYALTY_ELIGIBLE_BRANDS;
   ROYALTY_BRANDS.forEach(brand=>{ royaltyHtml += renderNoticeRoyaltyBlock(brand, dateStr); });
   document.getElementById('noticeRoyaltyContainer').innerHTML = royaltyHtml;
   requestAnimationFrame(applyNoticeFixedLayout);
@@ -1410,17 +1555,42 @@ document.querySelectorAll('#entryPeriod button').forEach(b=>b.addEventListener('
   b.classList.add('active'); state.entryPeriod=b.dataset.period; renderEntry();
 }));
 
+// 전월/전년동월 탭에서만 "기준월" 선택 UI를 보여준다. 예) 9월 마감장표를 준비 중이면
+// 기준월을 9월로 두면 전월 탭 입력값은 자동으로 8월 실적으로, 전년동월 탭 입력값은
+// 25년 9월 실적으로 저장된다.
+function updateEntryMonthUI(){
+  const wrap = document.getElementById('entryMonthWrap');
+  const picker = document.getElementById('entryMonthPicker');
+  const isMonthly = MONTHLY_PERIODS.has(state.entryPeriod);
+  if(!wrap || !picker) return;
+  wrap.style.display = isMonthly ? '' : 'none';
+  if(isMonthly){
+    picker.value = state.entryMonth;
+    const mk = targetMonthKeyFor(state.entryPeriod, state.entryMonth + '-01');
+    const hint = document.getElementById('entryMonthHint');
+    if(hint) hint.textContent = state.entryPeriod==='전월'
+      ? `→ ${mk} 실적으로 저장돼요`
+      : `→ ${mk} 실적으로 저장돼요`;
+  }
+}
+document.getElementById('entryMonthPicker').addEventListener('change', (e)=>{
+  state.entryMonth = e.target.value || defaultWorkMonth();
+  renderEntry();
+});
+
 function renderEntry(){
   renderPosTabs();
+  updateEntryMonthUI();
   const period = state.entryPeriod, account = state.entryPos;
   const schemaKey = ACCOUNTS[account].schema;
   const schema = POS_SCHEMA[schemaKey];
   const rows = storesForAccount(account);
   const grid = document.getElementById('entryGrid');
+  const baseDateStr = MONTHLY_PERIODS.has(period) ? (state.entryMonth + '-01') : null;
   grid.innerHTML = `
     <thead><tr>${schema.fields.map(f=>`<th>${f}</th>`).join('')}</tr></thead>
     <tbody>${rows.map(s=>{
-      const rec = SALES[period]?.[s.name] || {};
+      const rec = getSalesRecRaw(period, s.name, baseDateStr) || {};
       return `<tr>
         ${schema.fields.map(f=>{
           const isText = TEXT_FIELDS.has(f);
@@ -1555,6 +1725,11 @@ const STORE_ALIASES = {
   '얼얼하이 청주 성안점': '얼얼하이(성안점)',
   '얼얼하이 아산점': '얼얼하이(아산용화점)',
   '얼얼하이 아산 점': '얼얼하이(아산용화점)',
+  // 전주송천점은 포스(업솔루션)상 매장명이 "에코시티점"으로 등록돼 있어 매출 데이터를
+  // 붙여넣을 때 이 이름으로 들어온다 — 새 지점으로 자동 등록되지 않도록 별칭 처리.
+  '에코시티점': '퐁당(전주송천점)',
+  '퐁당 에코시티점': '퐁당(전주송천점)',
+  '전주 에코시티점': '퐁당(전주송천점)',
 };
 
 function normalizeName(s){ return (s||'').replace(/\s+/g,'').replace(/[()]/g,''); }
@@ -1585,6 +1760,7 @@ function matchStore(pastedName, account){
 document.getElementById('saveBtn').addEventListener('click', ()=>{
   const period = state.entryPeriod, account = state.entryPos;
   const schema = POS_SCHEMA[ACCOUNTS[account].schema];
+  const baseDateStr = MONTHLY_PERIODS.has(period) ? (state.entryMonth + '-01') : null;
   let unmatched = [];
   document.querySelectorAll('#entryGrid tbody tr').forEach(row=>{
     const inputs = row.querySelectorAll('input');
@@ -1592,9 +1768,9 @@ document.getElementById('saveBtn').addEventListener('click', ()=>{
     const pastedName = nameInput.value.trim();
     const store = matchStore(pastedName, account);
     if(!store){ unmatched.push(pastedName || '(빈 칸)'); return; }
-    const rec = SALES[period][store.name] || {};
+    const rec = getSalesRecRaw(period, store.name, baseDateStr) || {};
     inputs.forEach(inp=>{ rec[inp.dataset.field] = TEXT_FIELDS.has(inp.dataset.field) ? inp.value : (+inp.value || 0); });
-    SALES[period][store.name] = rec;
+    setSalesRec(period, store.name, baseDateStr, rec);
   });
   saveSales(SALES);
   if(unmatched.length){
@@ -1605,8 +1781,26 @@ document.getElementById('saveBtn').addEventListener('click', ()=>{
   renderAll();
 });
 document.getElementById('resetBtn').addEventListener('click', ()=>{
-  if(!confirm('입력한 데이터를 예시 데이터로 되돌릴까요?')) return;
-  SALES = seedSales(); saveSales(SALES); renderAll();
+  const period = state.entryPeriod, account = state.entryPos;
+  const isMonthly = MONTHLY_PERIODS.has(period);
+  const baseDateStr = isMonthly ? (state.entryMonth + '-01') : null;
+  const label = isMonthly ? `${period}(${state.entryMonth} 기준월)` : period;
+  if(!confirm(`[${account}] 탭의 "${label}" 데이터만 예시 데이터로 되돌릴까요? 다른 탭·다른 기준월 데이터는 그대로 유지돼요.`)) return;
+  storesForAccount(account).forEach(s=>{
+    setSalesRec(period, s.name, baseDateStr, buildSeedRecord(period, s));
+  });
+  saveSales(SALES);
+  renderAll();
+  showToast(`[${account}] · ${label} 데이터를 예시 데이터로 초기화했어요.`);
+});
+document.getElementById('restoreYesterdayBtn').addEventListener('click', ()=>{
+  const snap = loadDailySnapshot();
+  if(!snap){ showToast('복구할 전일 데이터가 없어요.'); return; }
+  if(!confirm(`전일(${snap.date} 접속 시점 기준) 데이터로 전체 매출 데이터를 되돌릴까요? 오늘 입력·수정한 내용은 사라져요.`)) return;
+  SALES = JSON.parse(JSON.stringify(snap.sales));
+  saveSales(SALES);
+  renderAll();
+  showToast(`전일(${snap.date}) 기준 데이터로 복구했어요.`);
 });
 
 function showToast(msg){
@@ -1679,7 +1873,7 @@ function renderAdmin(){
     if(!confirm(`"${store.name}" 지점을 삭제할까요?`)) return;
     const idx = STORES.findIndex(s=>s.id===id);
     if(idx>=0) STORES.splice(idx,1);
-    PERIODS.forEach(p=>{ if(SALES[p]) delete SALES[p][store.name]; });
+    deleteStoreSales(store.name);
     saveStores(STORES);
     saveSales(SALES);
     showToast(`"${store.name}" 지점을 삭제했어요.`);
@@ -1706,13 +1900,46 @@ document.getElementById('adminAddBtn').addEventListener('click', ()=>{
   showToast('새 지점을 추가했어요.');
 });
 document.getElementById('adminSaveBtn').addEventListener('click', ()=>{
+  // 1) 화면에 있는 행들이 "적용하려는" 매장명을 먼저 전부 계산한다 (STORES는 아직 건드리지 않음).
+  //    검색창으로 일부 지점이 안 보이는 상태일 수 있으므로, 실제 반영은 3)에서 한다.
+  const pending = [];
   document.querySelectorAll('#adminGrid tbody tr').forEach(row=>{
     const id = +row.dataset.id;
     const liveStore = STORES.find(s=>s.id===id);
     if(!liveStore) return;
-    const oldName = liveStore.name;
-    row.querySelectorAll('[data-field]').forEach(el=>{
-      const f = el.dataset.field;
+    const fieldEls = {};
+    row.querySelectorAll('[data-field]').forEach(el=>{ fieldEls[el.dataset.field] = el; });
+    const newBrand = fieldEls.brand ? fieldEls.brand.value : liveStore.brand;
+    const newShort = fieldEls.short ? fieldEls.short.value.trim() : liveStore.short;
+    pending.push({ id, liveStore, oldName: liveStore.name, fieldEls, newName: `${newBrand}(${newShort})` });
+  });
+
+  // 2) 이름 충돌 검사 — 이번에 수정하는 행끼리는 물론, 화면에 안 보이는(검색 필터에 가려진)
+  //    다른 지점이 이미 쓰고 있는 이름과 겹치는 것도 충돌로 본다. 실제로 이름이 "바뀌는"
+  //    행만 검사 대상 — 그대로 유지되는 행은 다른 행과 이름이 같아도 문제없다.
+  const pendingIds = new Set(pending.map(p=>p.id));
+  const ownersByName = new Map();
+  pending.forEach(p=>{
+    if(!ownersByName.has(p.newName)) ownersByName.set(p.newName, []);
+    ownersByName.get(p.newName).push(p.id);
+  });
+  STORES.forEach(s=>{
+    if(pendingIds.has(s.id)) return;
+    if(ownersByName.has(s.name)) ownersByName.get(s.name).push(s.id);
+  });
+  const blocked = pending.filter(p=>{
+    const isChanging = p.newName !== p.oldName;
+    return isChanging && (ownersByName.get(p.newName)||[]).length > 1;
+  });
+  const blockedIds = new Set(blocked.map(p=>p.id));
+
+  // 3) 실제 반영 — 충돌난 행은 매장명(브랜드·짧은이름)만 원래 값을 유지하고 나머지 항목은
+  //    정상적으로 저장한다. 매출 데이터는 이름이 실제로 바뀐 경우에만 이관한다.
+  pending.forEach(p=>{
+    const { liveStore, fieldEls, oldName } = p;
+    const skipNameChange = blockedIds.has(p.id);
+    Object.entries(fieldEls).forEach(([f, el])=>{
+      if(skipNameChange && (f==='brand' || f==='short')) return;
       if(f==='royaltyPct'){
         liveStore.royalty = el.value==='' ? 0 : +el.value/100;
       }else if(f==='royaltyFixed'){
@@ -1725,19 +1952,20 @@ document.getElementById('adminSaveBtn').addEventListener('click', ()=>{
         liveStore[f] = el.value;
       }
     });
-    liveStore.name = `${liveStore.brand}(${liveStore.short})`;
-    if(liveStore.name !== oldName){
-      PERIODS.forEach(p=>{
-        if(SALES[p] && SALES[p][oldName]!==undefined){
-          SALES[p][liveStore.name] = SALES[p][oldName];
-          delete SALES[p][oldName];
-        }
-      });
+    if(!skipNameChange){
+      liveStore.name = p.newName;
+      if(liveStore.name !== oldName) migrateStoreSales(oldName, liveStore.name);
     }
   });
+
   saveStores(STORES);
   saveSales(SALES);
-  showToast('가맹점 정보를 저장했어요.');
+  if(blocked.length){
+    const sample = blocked.map(p=>`"${p.newName}"`).slice(0,3).join(', ');
+    showToast(`⚠ 이미 다른 지점이 쓰고 있는 이름이라 변경되지 않은 곳이 있어요: ${sample}${blocked.length>3?' 외':''} — 매장을 합치려면 두 지점 중 하나를 확인 후 삭제해주세요.`);
+  }else{
+    showToast('가맹점 정보를 저장했어요.');
+  }
   renderAll();
 });
 
@@ -1750,28 +1978,214 @@ function loadArchives(){
 function saveArchives(a){ localStorage.setItem('yfp_archives', JSON.stringify(a)); }
 let ARCHIVES = loadArchives();
 
-function syncPrevMonthFromArchives(){
+// 업로드된 모든 월별 마감장표를 SALES['전월'][해당월] 에 반영한다.
+// (SALES['전월']은 "전월 전용"이 아니라 "절대월별 실적 저장소" 역할도 겸한다 —
+//  9월 마감장표의 전월로도 쓰이고, 1년 뒤 같은 달의 전년동월 폴백으로도 자동으로 쓰인다.)
+// 업로드/삭제 어느 쪽이든 이미 들어있는 값을 덮어쓰기만 할 뿐, 아카이브가 없는 다른 월의
+// 수기 입력값은 건드리지 않는다 — 마감장표를 삭제해도 그 전에 반영됐던 값이 바로 사라지진
+// 않으니, 잘못 올린 경우엔 해당 월 데이터를 매출 데이터 입력 화면에서 다시 확인해주세요.
+function syncMonthlyActualsFromArchives(){
   const months = Object.keys(ARCHIVES).sort();
-  const latest = months[months.length-1];
-  if(!latest) return;
-  const brands = ARCHIVES[latest].parsed?.brands || {};
   let matched = 0;
-  Object.values(brands).forEach(rows=>{
-    rows.forEach(row=>{
-      const store = STORES.find(s=>s.name===row.name);
-      if(!store || row.curSales==null) return;
-      const schema = POS_SCHEMA[store.pos];
-      SALES['전월'][store.name] = {
-        ...(SALES['전월'][store.name]||{}),
-        [schema.sales]: row.curSales,
-        [schema.receipts]: row.receipts,
-      };
-      matched++;
+  months.forEach(month=>{
+    const brands = ARCHIVES[month].parsed?.brands || {};
+    Object.values(brands).forEach(rows=>{
+      rows.forEach(row=>{
+        const store = STORES.find(s=>s.name===row.name);
+        if(!store || row.curSales==null) return;
+        const schema = POS_SCHEMA[store.pos];
+        SALES['전월'] = SALES['전월'] || {};
+        SALES['전월'][month] = SALES['전월'][month] || {};
+        SALES['전월'][month][store.name] = {
+          ...(SALES['전월'][month][store.name]||{}),
+          [schema.sales]: row.curSales,
+          [schema.receipts]: row.receipts,
+        };
+        matched++;
+      });
     });
   });
   if(matched) saveSales(SALES);
 }
-syncPrevMonthFromArchives();
+syncMonthlyActualsFromArchives();
+
+/* ---------- 월마감 자동화: 실시간 데이터 → 마감장표 엑셀 + 전월/전년동월 자동 반영 ----------
+   새 달로 접속 시점이 넘어간 걸 감지하면(=지난달이 마감됐다는 뜻) 그 시점의 실시간 데이터를
+   그대로 그 달의 "확정 실적"으로 캡처해서: ① 전월 버킷에 절대월로 저장(다음 달의 전월,
+   1년 뒤엔 전년동월 폴백으로 자동 재사용) ② 조회 월 아카이브에 등록 ③ 엑셀 워크북을
+   준비해두고 안내 모달에서 다운로드 버튼으로 받을 수 있게 한다(자동 다운로드는 브라우저
+   팝업 차단에 걸릴 수 있어 클릭 한 번으로 받게 함). */
+let pendingCloseWorkbook = null;
+
+// 라이브 데이터를 업로드 파싱 결과와 동일한 형태({brands, royalty, skipped})로 변환.
+// 이 형태 그대로 ARCHIVES에 등록하면, 엑셀을 업로드했을 때와 완전히 동일하게 취급된다.
+function buildLiveArchiveSnapshot(){
+  const brands = {}, royalty = {};
+  BRANDS.forEach(brand=>{
+    const rows = STORES.filter(s=>s.brand===brand).map(s=>{
+      const cur = metricsFor(s.name,'당월누적') || {days:0,receipts:0,sales:0,unit:0,dayAvg:0};
+      const prevDay = metricsFor(s.name,'전일')?.sales;
+      const proj = projectedClose(s.name);
+      const prevMonth = metricsFor(s.name,'전월')?.sales;
+      const prevYear = metricsFor(s.name,'전년동월')?.sales;
+      return {
+        name: s.name, region: s.region, opened: s.opened, type: s.type,
+        prevDay: prevDay ?? null, receipts: cur.receipts, unit: cur.unit,
+        curSales: cur.sales, proj, dayAvg: cur.dayAvg,
+        prevMonth: prevMonth ?? null, momP: prevMonth ? (proj-prevMonth)/prevMonth : null,
+        prevYear: prevYear ?? null, yoyP: prevYear ? (proj-prevYear)/prevYear : null,
+      };
+    }).sort((a,b)=>b.curSales-a.curSales);
+    if(rows.length) brands[brand] = rows;
+  });
+  ROYALTY_ELIGIBLE_BRANDS.forEach(brand=>{
+    const rows = STORES.filter(s=>s.brand===brand).slice()
+      .sort((a,b)=>new Date(a.opened)-new Date(b.opened))
+      .map(s=>{
+        const cur = metricsFor(s.name,'당월누적')?.sales || 0;
+        const proj = projectedClose(s.name);
+        const isFixed = !!s.royaltyFixed;
+        return {
+          name: s.name, region: s.region, opened: s.opened, type: s.type,
+          cur, proj, royaltyDisplay: isFixed ? '정액' : royPct(s.royalty),
+          royCur: isFixed ? s.royaltyFixed : cur*s.royalty,
+          royProj: isFixed ? s.royaltyFixed : proj*s.royalty,
+        };
+      });
+    if(rows.length) royalty[brand] = rows;
+  });
+  return { brands, royalty, skipped: [] };
+}
+
+// snapshot → 엑셀 워크북. parseArchiveWorkbook이 알아보는 컬럼명을 그대로 써서, 필요하면
+// 이 파일을 그대로 다시 업로드해도 정상적으로 인식된다.
+function buildClosingWorkbook(monthKey, snapshot){
+  const wsData = [];
+  wsData.push([`${monthKey} 마감장표`]);
+  wsData.push([]);
+  BRANDS.forEach(brand=>{
+    const rows = snapshot.brands[brand];
+    if(!rows || !rows.length) return;
+    wsData.push([brand]);
+    wsData.push(['순위','지역','지점명','사업개시일','전일매출','영수건수','영수단가','당월누적매출','당월예상마감','일평균매출','전월매출','증감률(전월)','전년동월매출','증감률(전년동월)']);
+    rows.forEach((r,i)=>{
+      wsData.push([
+        i+1, r.region||'', displayStoreName(r.name), r.opened||'',
+        r.prevDay ?? '', r.receipts ?? '', r.unit ?? '', r.curSales ?? '',
+        r.proj ?? '', r.dayAvg ?? '',
+        r.prevMonth ?? '', r.momP!=null ? +(r.momP*100).toFixed(2) : '',
+        r.prevYear ?? '', r.yoyP!=null ? +(r.yoyP*100).toFixed(2) : '',
+      ]);
+    });
+    wsData.push([]);
+  });
+  ROYALTY_ELIGIBLE_BRANDS.forEach(brand=>{
+    const rows = snapshot.royalty[brand];
+    if(!rows || !rows.length) return;
+    wsData.push([`${brand} 로열티현황`]);
+    wsData.push(['개설순','지역','지점명','사업개시일','당월누적','예상마감','로열티율','당월누적기준','예상마감기준']);
+    rows.forEach((r,i)=>{
+      wsData.push([i+1, r.region||'', displayStoreName(r.name), r.opened||'', r.cur ?? '', r.proj ?? '', r.royaltyDisplay||'', r.royCur ?? '', r.royProj ?? '']);
+    });
+    wsData.push([]);
+  });
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '마감장표');
+  return wb;
+}
+function downloadWorkbook(wb, filename){ XLSX.writeFile(wb, filename); }
+
+// closedMonthKey(예: '2026-08')의 라이브 데이터를 그 달의 확정 실적으로 캡처한다.
+// 새 달로 넘어간 걸 감지한 "직후" 단 한 번만 호출되므로, 이 시점의 SALES['당월누적']은
+// 아직 새 달 데이터로 덮이기 전 — 즉 closedMonthKey의 최종 실적 그대로다.
+function finalizeMonthClose(closedMonthKey){
+  const snapshot = buildLiveArchiveSnapshot();
+  let storeCount = 0;
+  Object.values(snapshot.brands).forEach(rows=>{
+    rows.forEach(row=>{
+      const store = STORES.find(s=>s.name===row.name);
+      if(!store || row.curSales==null) return;
+      const schema = POS_SCHEMA[store.pos];
+      SALES['전월'] = SALES['전월'] || {};
+      SALES['전월'][closedMonthKey] = SALES['전월'][closedMonthKey] || {};
+      SALES['전월'][closedMonthKey][store.name] = {
+        ...(SALES['전월'][closedMonthKey][store.name]||{}),
+        [schema.sales]: row.curSales,
+        [schema.receipts]: row.receipts,
+      };
+      storeCount++;
+    });
+  });
+  if(storeCount) saveSales(SALES);
+
+  ARCHIVES[closedMonthKey] = { fileName:`${closedMonthKey}_자동마감.xlsx`, uploadedAt: Date.now(), parsed: snapshot, auto:true };
+  saveArchives(ARCHIVES);
+
+  pendingCloseWorkbook = { monthKey: closedMonthKey, wb: buildClosingWorkbook(closedMonthKey, snapshot) };
+  showMonthCloseModal(closedMonthKey, storeCount);
+}
+
+function showMonthCloseModal(closedMonthKey, storeCount){
+  document.getElementById('modalBody').classList.remove('modal-wide');
+  document.getElementById('modalBody').innerHTML = `
+    <span class="close" id="modalClose">✕</span>
+    <h2>📦 ${closedMonthKey} 마감 처리 완료</h2>
+    <div style="font-size:13px;color:var(--muted);line-height:1.7;margin-top:10px;">
+      새 달이 시작되어 <b>${closedMonthKey}</b> 마감 데이터를 자동으로 정리했어요.<br><br>
+      · ${storeCount}개 매장 실적이 이후 <b>"전월"</b> 값으로 자동 반영돼요.<br>
+      · 1년 뒤에는 같은 달이 <b>"전년동월"</b> 값으로도 자동 사용돼요.<br>
+      · 공지용 마감장표의 "조회 월"에서 ${closedMonthKey}를 바로 확인할 수 있어요.
+    </div>
+    <div style="display:flex; gap:8px; margin-top:22px; justify-content:flex-end;">
+      <button class="btn ghost small" id="monthCloseSkip">닫기</button>
+      <button class="btn small" id="monthCloseDownload">📥 ${closedMonthKey} 마감장표 엑셀 다운로드</button>
+    </div>`;
+  document.getElementById('overlay').classList.add('open');
+  document.getElementById('modalClose').addEventListener('click', closeModal);
+  document.getElementById('monthCloseSkip').addEventListener('click', closeModal);
+  document.getElementById('monthCloseDownload').addEventListener('click', ()=>{
+    if(pendingCloseWorkbook && pendingCloseWorkbook.monthKey===closedMonthKey){
+      downloadWorkbook(pendingCloseWorkbook.wb, `${closedMonthKey}_마감장표.xlsx`);
+    }
+  });
+}
+
+const LAST_SEEN_MONTH_KEY = 'yfp_last_seen_month';
+// 접속 시점의 달이 바뀌었는지 확인하고, 바뀌었다면 지난달을 마감 처리한다.
+// 실패하면(예: 엑셀 라이브러리 로딩 실패) last-seen 값을 갱신하지 않아 다음 접속 때 다시 시도한다.
+function checkMonthRollover(){
+  const todayMk = monthKeyOf(todayLocalStr());
+  const last = localStorage.getItem(LAST_SEEN_MONTH_KEY);
+  if(!last){ localStorage.setItem(LAST_SEEN_MONTH_KEY, todayMk); return; }
+  if(last === todayMk) return;
+  try{
+    if(typeof XLSX !== 'undefined'){
+      finalizeMonthClose(last);
+    }
+    localStorage.setItem(LAST_SEEN_MONTH_KEY, todayMk);
+  }catch(e){
+    console.error('월마감 자동 처리 실패', e);
+  }
+}
+
+// 마감장표 업로드 화면의 "지금 마감장표 엑셀로 저장" 버튼 — 자동 마감을 기다리지 않고
+// 언제든 현재 실시간 데이터를 기준으로 수동으로 마감 처리하고 싶을 때 사용.
+document.getElementById('manualCloseBtn').addEventListener('click', ()=>{
+  if(typeof XLSX === 'undefined'){ showToast('엑셀 처리 라이브러리를 불러오지 못했어요.'); return; }
+  const mk = document.getElementById('manualCloseMonth').value || defaultWorkMonth();
+  if(!confirm(`${mk} 마감장표를 지금 시점의 실시간 데이터로 만들어 엑셀로 저장하고, 조회 월 목록에도 등록할까요?`)) return;
+  const snapshot = buildLiveArchiveSnapshot();
+  const brandCount = Object.keys(snapshot.brands).length;
+  if(!brandCount){ showToast('반영할 매출 데이터가 없어요.'); return; }
+  ARCHIVES[mk] = { fileName:`${mk}_수동마감.xlsx`, uploadedAt: Date.now(), parsed: snapshot, auto:false };
+  saveArchives(ARCHIVES);
+  syncMonthlyActualsFromArchives();
+  renderArchiveList();
+  populateNoticeMonthSelect();
+  downloadWorkbook(buildClosingWorkbook(mk, snapshot), `${mk}_마감장표.xlsx`);
+  showToast(`${mk} 마감장표를 저장하고 다운로드했어요.`);
+});
 
 function renderArchiveList(){
   const months = Object.keys(ARCHIVES).sort().reverse();
@@ -1788,7 +2202,7 @@ function renderArchiveList(){
     if(!confirm(`${b.dataset.month} 마감장표를 삭제할까요?`)) return;
     delete ARCHIVES[b.dataset.month];
     saveArchives(ARCHIVES);
-    syncPrevMonthFromArchives();
+    syncMonthlyActualsFromArchives();
     renderArchiveList();
     populateNoticeMonthSelect();
   }));
@@ -1814,7 +2228,7 @@ document.getElementById('archiveUploadBtn').addEventListener('click', async ()=>
     }
     ARCHIVES[month] = { fileName:file.name, uploadedAt:Date.now(), parsed };
     saveArchives(ARCHIVES);
-    syncPrevMonthFromArchives();
+    syncMonthlyActualsFromArchives();
     renderArchiveList();
     populateNoticeMonthSelect();
     showToast(`${month} 마감장표를 저장했어요 (${brandCount}개 브랜드 인식됨).`);
@@ -1846,6 +2260,7 @@ function renderAll(){
 }
 initNoticeDate();
 populateNoticeMonthSelect();
+checkMonthRollover();
 document.body.classList.toggle('view-notice', state.view === 'notice');
 renderNav();
 renderAll();
